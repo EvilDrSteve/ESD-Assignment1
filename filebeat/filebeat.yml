@@ -1,0 +1,25 @@
+filebeat.inputs:
+  - type: log
+    enabled: true
+    paths:
+      - /var/log/app/app.log
+    json.keys_under_root: true
+    json.overwrite_keys: true
+
+processors:
+  - drop_fields:
+      fields:
+        - agent
+        - ecs
+        - host
+        - input
+        - log
+        - taskName
+      ignore_missing: true
+
+output.elasticsearch:
+  hosts: ["http://elasticsearch:9200"]
+  index: "store-logs-%{+yyyy.MM.dd}"
+
+setup.ilm.enabled: false
+setup.template.enabled: false

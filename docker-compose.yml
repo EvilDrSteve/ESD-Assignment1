@@ -1,0 +1,107 @@
+services:
+
+  # ── Application ────────────────────────────────────────────────────────────
+  app:
+    build: ./app
+    container_name: service-request-app
+    ports:
+      - "8050:8050"
+    restart: unless-stopped
+    environment:
+      - FAULT_INJECTION=false
+      - LOG_DIR=/var/log/app
+    volumes:
+      - app_logs:/var/log/app
+    labels:
+      - "co.elastic.logs/enabled=true"
+
+  # ── Metrics stack (Part B) ─ uncomment when ready ──────────────────────────
+  prometheus:
+    image: prom/prometheus:v2.54.0
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    container_name: node-exporter
+    pid: host
+    ports:
+      - "9100:9100"
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - "--path.procfs=/host/proc"
+      - "--path.sysfs=/host/sys"
+      - "--collector.filesystem.ignored-mount-points=^/(sys|proc|dev|host|etc)($$|/)"
+
+  # ── Logging stack (Part C) ──────────────────────────────────────────────
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.15.0
+    container_name: elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+    ports:
+      - "9200:9200"
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+
+  es-init:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.15.0
+    container_name: es-init
+    depends_on:
+      - elasticsearch
+    restart: "no"
+    entrypoint: []
+    command: sh /init-template.sh
+    volumes:
+      - ./elasticsearch/init-template.sh:/init-template.sh:ro
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.15.0
+    container_name: kibana
+    ports:
+      - "5601:5601"
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+    depends_on:
+      - elasticsearch
+
+  filebeat:
+    image: docker.elastic.co/beats/filebeat:8.15.0
+    container_name: filebeat
+    user: root
+    entrypoint: []
+    command: >
+      sh -c 'cp /tmp/filebeat.yml /usr/share/filebeat/filebeat.yml &&
+             chown root:root /usr/share/filebeat/filebeat.yml &&
+             chmod go-w /usr/share/filebeat/filebeat.yml &&
+             exec filebeat -e'
+    volumes:
+      - ./filebeat/filebeat.yml:/tmp/filebeat.yml:ro
+      - app_logs:/var/log/app:ro
+      - filebeat_data:/usr/share/filebeat/data
+    depends_on:
+      - es-init
+
+volumes:
+  prometheus_data:
+  grafana_data:
+  es_data:
+  filebeat_data:
+  app_logs:
