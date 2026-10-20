@@ -63,3 +63,28 @@ docker compose down
 docker volume rm assignment-1_filebeat_data assignment-1_es_data
 docker compose up --build
 ```
+
+---
+
+# Assignment 2 Progress (branch `assignment-2`)
+
+## Part A — HTTP API (40) ✅
+- [x] Redis as shared source of truth, business rules in `app/orders_service.py`
+- [x] Routes cleaned up (plural nouns, PUT/PATCH/DELETE semantics), pydantic validation, RFC 9457 errors
+- [x] `openapi.yaml` + drift test + contract test (`tests/test_contract.py`)
+- [x] Idempotency-Key on POST /orders (works across HTTP and gRPC)
+- [x] Rate limit POST /orders: 5 / 10 s / client IP, 429 + Retry-After
+- [x] Python caller with timeout, retry+backoff, circuit breaker (`clients/`)
+- [x] Evidence: `evidence/reliability_demo.txt`, `evidence/rate_limit_demo.txt`
+
+## Part B — gRPC (30) ✅
+- [x] `app/proto/orders.proto`, generated `app/gen/`, `grpc-server` container
+- [x] `clients/grpc_client.py` with deadline + request id
+- [x] Request id propagated via metadata; grpc.log shipped by Filebeat
+- [x] Evidence: `evidence/examples.txt` (both transports, ES trace)
+
+## Part C — Metrics (30) ✅ (screenshots pending)
+- [x] gRPC interceptor metrics; Prometheus job `store-grpc`
+- [x] Grafana provisioned: `grafana/dashboards/store-a2.json`
+- [x] `scripts/gen_calls.sh` to populate panels
+- [ ] Screenshots: Grafana A2 dashboard, Prometheus targets, Kibana trace, Swagger UI

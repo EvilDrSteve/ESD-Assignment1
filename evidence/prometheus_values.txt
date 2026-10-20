@@ -1,0 +1,13 @@
+HTTP POST /orders calls/s by status: status=201=0.08052; status=429=0; status=409=0.0671; status=422=0.0671
+gRPC PlaceOrder calls/s by code: grpc_code=OK=0.08052; grpc_code=FAILED_PRECONDITION=0.0671; grpc_code=INVALID_ARGUMENT=0.0671
+HTTP p50 (s): value=0.002727
+HTTP p95 (s): value=0.004909
+gRPC p50 (s): value=0.001429
+gRPC p95 (s): value=0.004214
+HTTP 4xx ratio: value=0.625
+HTTP 5xx ratio: (no data)
+gRPC caller-error ratio: value=0.625
+checkout failures (increase 5m): reason=cart-empty,transport=http=20.27; reason=cart-empty,transport=grpc=20.13; reason=validation-error,transport=grpc=20.13
+idempotent replays (increase 5m): transport=http=4.053; transport=grpc=4.026
+HTTP 429 (increase 5m): value=0
+orders placed (increase 5m): transport=grpc=20.13; transport=http=20.27
