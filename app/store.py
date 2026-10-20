@@ -1,8 +1,25 @@
+"""Redis-backed store: the single source of truth for the HTTP and gRPC services.
+
+Key layout
+  product:{id}            hash   name, description, category, price, stock
+  products                set    all product ids
+  cart:{id}               hash   product_id -> quantity (deleted when empty)
+  carts:active            set    cart ids that currently hold items
+  order:{id}              string Order JSON
+  orders                  zset   order ids scored by creation time
+  orders:status:{status}  set    order ids per status (for cheap counts)
+  idem:{scope}:{key}      string idempotency record JSON, with a TTL
+"""
+
+import json
+import os
 from datetime import datetime, timezone
-from typing import Dict, Optional
+from typing import Callable, Optional
 import uuid
 
-from models import Product, Cart, CartItem, CartItemResponse, Order, OrderItem, OrderStatus
+import redis
+
+from models import Product, Cart, CartItemResponse, Order, OrderItem, OrderStatus
 
 
 SEED_PRODUCTS = [
@@ -14,147 +31,214 @@ SEED_PRODUCTS = [
     Product(id="p6", name="Desk Lamp", description="LED desk lamp with dimmer", category="furniture", price=34.99, stock=999999),
     Product(id="p7", name="Monitor Stand", description="Adjustable monitor riser", category="furniture", price=49.99, stock=999999),
     Product(id="p8", name="Webcam HD", description="1080p webcam with mic", category="electronics", price=59.99, stock=999999),
+    # Low stock on purpose, so "insufficient stock" is easy to demonstrate
+    Product(id="p9", name="Limited Edition Mug", description="Only a few made", category="kitchen", price=14.99, stock=3),
 ]
 
 
-class InMemoryStore:
-    def __init__(self):
-        self._products: Dict[str, Product] = {p.id: p for p in SEED_PRODUCTS}
-        self._carts: Dict[str, Dict[str, int]] = {}  # cart_id -> {product_id: qty}
-        self._orders: Dict[str, Order] = {}
+def _product_key(pid: str) -> str:
+    return f"product:{pid}"
+
+
+def _cart_key(cart_id: str) -> str:
+    return f"cart:{cart_id}"
+
+
+def _order_key(order_id: str) -> str:
+    return f"order:{order_id}"
+
+
+def _status_key(status: str) -> str:
+    return f"orders:status:{status}"
+
+
+class RedisStore:
+    def __init__(self, client: redis.Redis):
+        self.r = client
+
+    def seed(self):
+        """Load the catalogue once; later restarts of the app keep existing stock."""
+        if not self.r.set("store:seeded", "1", nx=True):
+            return
+        pipe = self.r.pipeline()
+        for p in SEED_PRODUCTS:
+            pipe.hset(_product_key(p.id), mapping=p.model_dump(exclude={"id"}))
+            pipe.sadd("products", p.id)
+        pipe.execute()
 
     # ── Products ──────────────────────────────────────────────────────────
 
+    def _load_product(self, pid: str, data: dict) -> Optional[Product]:
+        if not data:
+            return None
+        return Product(id=pid, **data)
+
+    def get_product(self, product_id: str) -> Optional[Product]:
+        return self._load_product(product_id, self.r.hgetall(_product_key(product_id)))
+
     def list_products(self, category: Optional[str] = None) -> list[Product]:
-        products = list(self._products.values())
+        ids = sorted(self.r.smembers("products"))
+        products = [self.get_product(pid) for pid in ids]
+        products = [p for p in products if p]
         if category:
             products = [p for p in products if p.category == category]
         return products
 
-    def get_product(self, product_id: str) -> Optional[Product]:
-        return self._products.get(product_id)
-
     # ── Cart ──────────────────────────────────────────────────────────────
 
-    def get_or_create_cart(self, cart_id: str) -> str:
-        if cart_id not in self._carts:
-            self._carts[cart_id] = {}
-        return cart_id
-
-    def add_to_cart(self, cart_id: str, item: CartItem) -> Cart:
-        self.get_or_create_cart(cart_id)
-        current_qty = self._carts[cart_id].get(item.product_id, 0)
-        self._carts[cart_id][item.product_id] = current_qty + item.quantity
-        return self.get_cart(cart_id)
-
-    def remove_from_cart(self, cart_id: str, product_id: str) -> Cart:
-        if cart_id in self._carts:
-            self._carts[cart_id].pop(product_id, None)
-        return self.get_cart(cart_id)
+    def cart_exists(self, cart_id: str) -> bool:
+        return bool(self.r.exists(_cart_key(cart_id)))
 
     def get_cart(self, cart_id: str) -> Cart:
-        self.get_or_create_cart(cart_id)
+        """Read-only: an unknown cart is returned as empty and is NOT created."""
+        raw = self.r.hgetall(_cart_key(cart_id))
         items = []
         total = 0.0
-        for pid, qty in self._carts[cart_id].items():
-            product = self._products.get(pid)
+        for pid, qty in sorted(raw.items()):
+            product = self.get_product(pid)
             if product:
-                subtotal = round(product.price * qty, 2)
+                subtotal = round(product.price * int(qty), 2)
                 items.append(CartItemResponse(
                     product_id=pid, name=product.name,
-                    price=product.price, quantity=qty, subtotal=subtotal,
+                    price=product.price, quantity=int(qty), subtotal=subtotal,
                 ))
                 total += subtotal
         return Cart(id=cart_id, items=items, total=round(total, 2))
 
-    def clear_cart(self, cart_id: str):
-        self._carts.pop(cart_id, None)
+    def set_cart_item(self, cart_id: str, product_id: str, quantity: int):
+        pipe = self.r.pipeline()
+        pipe.hset(_cart_key(cart_id), product_id, quantity)
+        pipe.sadd("carts:active", cart_id)
+        pipe.execute()
+
+    def remove_cart_item(self, cart_id: str, product_id: str) -> bool:
+        removed = self.r.hdel(_cart_key(cart_id), product_id)
+        if not self.r.exists(_cart_key(cart_id)):
+            self.r.srem("carts:active", cart_id)
+        return bool(removed)
+
+    def count_active_carts(self) -> int:
+        return self.r.scard("carts:active")
 
     # ── Orders ────────────────────────────────────────────────────────────
 
-    def create_order(self, cart_id: str) -> Optional[Order]:
-        if cart_id not in self._carts or not self._carts[cart_id]:
-            return None
+    def checkout(self, cart_id: str, build_items: Callable[[dict, dict], list[OrderItem]]) -> Order:
+        """Atomically turn a cart into an order and deduct stock.
 
-        now = datetime.now(timezone.utc)
-        order_items = []
-        total = 0.0
+        `build_items(cart, products)` applies the business rules and raises a
+        DomainError to abort. Redis WATCH retries the whole thing if the cart or
+        any product changes underneath us, so stock can never go negative.
+        """
+        cart_key = _cart_key(cart_id)
 
-        for pid, qty in self._carts[cart_id].items():
-            product = self._products.get(pid)
-            if not product or product.stock < qty:
-                return None
-            subtotal = round(product.price * qty, 2)
-            order_items.append(OrderItem(
-                product_id=pid, name=product.name,
-                price=product.price, quantity=qty, subtotal=subtotal,
-            ))
-            total += subtotal
+        def txn(pipe: redis.client.Pipeline):
+            cart = {pid: int(q) for pid, q in pipe.hgetall(cart_key).items()}
+            product_keys = [_product_key(pid) for pid in cart]
+            if product_keys:
+                pipe.watch(*product_keys)
+            products = {}
+            for pid in cart:
+                p = self._load_product(pid, pipe.hgetall(_product_key(pid)))
+                if p:
+                    products[pid] = p
 
-        # Deduct stock
-        for item in order_items:
-            p = self._products[item.product_id]
-            self._products[item.product_id] = p.model_copy(
-                update={"stock": p.stock - item.quantity}
+            items = build_items(cart, products)  # may raise DomainError
+
+            now = datetime.now(timezone.utc)
+            order = Order(
+                id=str(uuid.uuid4()),
+                cart_id=cart_id,
+                items=items,
+                total=round(sum(i.subtotal for i in items), 2),
+                status=OrderStatus.PENDING,
+                created_at=now,
+                updated_at=now,
             )
+            pipe.multi()
+            for item in items:
+                pipe.hincrby(_product_key(item.product_id), "stock", -item.quantity)
+            pipe.set(_order_key(order.id), order.model_dump_json())
+            pipe.zadd("orders", {order.id: now.timestamp()})
+            pipe.sadd(_status_key(order.status), order.id)
+            pipe.delete(cart_key)
+            pipe.srem("carts:active", cart_id)
+            return order
 
-        order = Order(
-            id=str(uuid.uuid4()),
-            items=order_items,
-            total=round(total, 2),
-            status=OrderStatus.PENDING,
-            created_at=now,
-            updated_at=now,
-        )
-        self._orders[order.id] = order
-        self.clear_cart(cart_id)
-        return order
+        return self.r.transaction(txn, cart_key, value_from_callable=True)
 
     def get_order(self, order_id: str) -> Optional[Order]:
-        return self._orders.get(order_id)
+        raw = self.r.get(_order_key(order_id))
+        return Order.model_validate_json(raw) if raw else None
 
     def list_orders(self, status: Optional[OrderStatus] = None) -> list[Order]:
-        orders = list(self._orders.values())
+        ids = self.r.zrange("orders", 0, -1)
+        orders = [self.get_order(oid) for oid in ids]
+        orders = [o for o in orders if o]
         if status:
             orders = [o for o in orders if o.status == status]
         return orders
 
-    def update_order_status(self, order_id: str, status: OrderStatus) -> Optional[Order]:
-        order = self._orders.get(order_id)
-        if not order:
-            return None
-        self._orders[order_id] = order.model_copy(
-            update={"status": status, "updated_at": datetime.now(timezone.utc)}
-        )
-        return self._orders[order_id]
+    def change_status(self, order_id: str, decide: Callable[[Order], Optional[OrderStatus]]) -> Order:
+        """Atomically move an order to the status returned by `decide(order)`.
 
-    def cancel_order(self, order_id: str) -> Optional[Order]:
-        order = self._orders.get(order_id)
-        if not order:
-            return None
-        # Restore stock
-        for item in order.items:
-            p = self._products.get(item.product_id)
-            if p:
-                self._products[item.product_id] = p.model_copy(
-                    update={"stock": p.stock + item.quantity}
-                )
-        return self.update_order_status(order_id, OrderStatus.CANCELLED)
+        `decide` applies the state machine; returning None means "no change"
+        (e.g. a repeated request). Cancelling restores stock.
+        """
+        key = _order_key(order_id)
+
+        def txn(pipe: redis.client.Pipeline):
+            raw = pipe.get(key)
+            if not raw:
+                return None
+            order = Order.model_validate_json(raw)
+            new_status = decide(order)
+            if new_status is None:
+                return order
+            updated = order.model_copy(update={"status": new_status.value, "updated_at": datetime.now(timezone.utc)})
+            pipe.multi()
+            pipe.set(key, updated.model_dump_json())
+            pipe.smove(_status_key(order.status), _status_key(updated.status), order_id)
+            if new_status == OrderStatus.CANCELLED:
+                for item in order.items:
+                    pipe.hincrby(_product_key(item.product_id), "stock", item.quantity)
+            return updated
+
+        return self.r.transaction(txn, key, value_from_callable=True)
+
+    def count_orders(self, status: OrderStatus) -> int:
+        return self.r.scard(_status_key(status.value))
 
     def get_stats(self) -> dict:
-        order_counts = {s.value: 0 for s in OrderStatus}
-        total_revenue = 0.0
-        for o in self._orders.values():
-            order_counts[o.status] += 1
-            if o.status not in (OrderStatus.CANCELLED,):
-                total_revenue += o.total
-
+        order_counts = {s.value: self.count_orders(s) for s in OrderStatus}
+        total_revenue = sum(
+            o.total for o in self.list_orders() if o.status != OrderStatus.CANCELLED
+        )
         return {
             "orders": order_counts,
             "total_revenue": round(total_revenue, 2),
-            "products_in_catalog": len(self._products),
-            "active_carts": len(self._carts),
+            "products_in_catalog": self.r.scard("products"),
+            "active_carts": self.count_active_carts(),
         }
 
+    # ── Idempotency records ───────────────────────────────────────────────
 
-store = InMemoryStore()
+    def claim_idempotency_key(self, key: str, record: dict, ttl_s: int) -> bool:
+        return bool(self.r.set(key, json.dumps(record), nx=True, ex=ttl_s))
+
+    def get_idempotency_record(self, key: str) -> Optional[dict]:
+        raw = self.r.get(key)
+        return json.loads(raw) if raw else None
+
+    def save_idempotency_record(self, key: str, record: dict, ttl_s: int):
+        self.r.set(key, json.dumps(record), ex=ttl_s)
+
+    def release_idempotency_key(self, key: str):
+        self.r.delete(key)
+
+
+def connect() -> redis.Redis:
+    url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+    return redis.Redis.from_url(url, decode_responses=True, socket_timeout=2, socket_connect_timeout=2)
+
+
+store = RedisStore(connect())

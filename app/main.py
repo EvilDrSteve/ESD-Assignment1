@@ -1,96 +1,195 @@
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, Header, Request, Response
+from fastapi.exceptions import RequestValidationError
+from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from contextlib import asynccontextmanager
+from typing import Annotated
+import asyncio
+import os
+import re
 import time
 import uuid
-import os
 
-from models import CartItem, OrderStatus
+from pydantic import BaseModel, Field
+from prometheus_client import generate_latest, CONTENT_TYPE_LATEST, Counter as PromCounter, Gauge
+
+import faults
+import orders_service as svc
+from errors import DomainError
+from logger import logger, request_id_var, transport_var
+from metrics import (
+    http_requests_total, http_request_duration_seconds, http_requests_in_flight,
+    http_rate_limited_total,
+)
+from models import (
+    Cart, Order, OrderStatus, PlaceOrderRequest, Problem, Product, SetCartItem,
+    UpdateOrderStatus,
+)
+from ratelimit import FixedWindowLimiter, RateLimited
 from store import store
-
-from fastapi.responses import Response
-from prometheus_client import generate_latest, CONTENT_TYPE_LATEST, Counter as PromCounter
-
-from metrics import *
-from logger import logger
 
 demo_good = PromCounter("demo_requests_total_good", "Demo counter without high-cardinality label")
 demo_bad = PromCounter("demo_requests_total_bad", "Demo counter with high-cardinality label", ["request_id"])
 
+# Read from Redis when Prometheus scrapes, so the value is right whichever
+# process (HTTP or gRPC) changed the data.
+def _from_redis(read):
+    def value():
+        try:
+            return read()
+        except Exception:  # Redis down: report "unknown" instead of failing the scrape
+            return float("nan")
+    return value
+
+
+orders_pending = Gauge("orders_pending", "Number of orders currently pending")
+orders_pending.set_function(_from_redis(lambda: store.count_orders(OrderStatus.PENDING)))
+active_carts = Gauge("active_carts", "Number of carts with items")
+active_carts.set_function(_from_redis(store.count_active_carts))
+
+# A1 experiment: every 5th request slow, every 7th fails
 FAULT_INJECTION = os.environ.get("FAULT_INJECTION", "false").lower() == "true"
 request_counter = 0
+
+ORDERS_RATE_LIMIT = int(os.environ.get("ORDERS_RATE_LIMIT", "5"))
+ORDERS_RATE_WINDOW_S = int(os.environ.get("ORDERS_RATE_WINDOW_S", "10"))
+orders_limiter = FixedWindowLimiter(ORDERS_RATE_LIMIT, ORDERS_RATE_WINDOW_S)
+
+REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+NO_FAULT_PATHS = ("/health", "/metrics", "/admin/faults", "/docs", "/openapi.json")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    print("Online Store API starting up")
+    store.seed()
+    logger.info("startup", extra={"service_port": 8050})
     yield
-    print("Online Store API shutting down")
+    logger.info("shutdown")
 
 
 app = FastAPI(
     title="Online Store API",
-    description="A simple online store — demo app for ESD Assignment 1.",
-    version="0.1.0",
+    description=(
+        "Online store HTTP API (ESD Assignment 2). Every error uses RFC 9457 problem details "
+        "(`application/problem+json`). Each response carries `X-Request-ID`; send your own to "
+        "correlate logs across services."
+    ),
+    version="2.0.0",
     lifespan=lifespan,
 )
 
 
-@app.middleware("http")
-async def attach_request_id(request: Request, call_next):
-    global request_counter
-    request_id = str(uuid.uuid4())
-    request.state.request_id = request_id
-    startTime = time.perf_counter()
+# ── Error format ──────────────────────────────────────────────────────────
 
-    if FAULT_INJECTION:
-        request_counter += 1
-        if request_counter % 5 == 0:
-            time.sleep(0.5)
-            logger.warning("fault_injected", extra={
-                "request_id": request_id,
-                "fault": "latency",
-                "delay_ms": 500,
-            })
-        if request_counter % 7 == 0:
-            duration = time.perf_counter() - startTime
-            endpoint = request.url.path
-            for route in app.routes:
-                if hasattr(route, "path") and hasattr(route, "matches"):
-                    match, _ = route.matches(request.scope)
-                    if match == match.FULL:
-                        endpoint = route.path
-                        break
-            http_requests_total.labels(method=request.method, endpoint=endpoint, status="500").inc()
-            http_request_duration_seconds.labels(method=request.method, endpoint=endpoint).observe(duration)
-            logger.warning("fault_injected", extra={
-                "request_id": request_id,
-                "fault": "error",
-                "status": 500,
-            })
-            return JSONResponse(status_code=500, content={"detail": "Injected server error"})
 
-    response = await call_next(request)
+def problem(status: int, type_: str, title: str, detail: str, request: Request,
+            errors: list | None = None, headers: dict | None = None) -> JSONResponse:
+    body = Problem(
+        type=f"/problems/{type_}", title=title, status=status, detail=detail,
+        instance=request.url.path, request_id=request_id_var.get(), errors=errors,
+    )
+    return JSONResponse(
+        status_code=status,
+        content=body.model_dump(exclude_none=True),
+        media_type="application/problem+json",
+        headers=headers,
+    )
 
-    duration = time.perf_counter() - startTime
-    method = request.method
 
-    # Match the request to a route template so dynamic IDs don't explode cardinality
-    endpoint = request.url.path
+@app.exception_handler(DomainError)
+async def domain_error_handler(request: Request, exc: DomainError):
+    return problem(exc.http_status, exc.type, exc.title, exc.detail, request)
+
+
+@app.exception_handler(RateLimited)
+async def rate_limited_handler(request: Request, exc: RateLimited):
+    return problem(
+        429, "rate-limited", "Too many requests", str(exc), request,
+        headers={
+            "Retry-After": str(exc.retry_after),
+            "X-RateLimit-Limit": str(exc.limit),
+            "X-RateLimit-Remaining": "0",
+        },
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error_handler(request: Request, exc: RequestValidationError):
+    errors = [
+        {"field": ".".join(str(p) for p in e["loc"]), "message": e["msg"]}
+        for e in exc.errors()
+    ]
+    return problem(422, "validation-error", "Invalid input", "The request has invalid fields", request, errors)
+
+
+@app.exception_handler(StarletteHTTPException)
+async def http_error_handler(request: Request, exc: StarletteHTTPException):
+    titles = {404: "Not found", 405: "Method not allowed"}
+    return problem(exc.status_code, f"http-{exc.status_code}", titles.get(exc.status_code, "HTTP error"),
+                   str(exc.detail), request, headers=getattr(exc, "headers", None))
+
+
+# ── Middleware: request id, metrics, logs, faults ─────────────────────────
+
+
+def route_template(request: Request) -> str:
+    """Map a request to its route template so IDs don't explode label cardinality."""
     for route in app.routes:
         if hasattr(route, "path") and hasattr(route, "matches"):
             match, _ = route.matches(request.scope)
             if match == match.FULL:
-                endpoint = route.path
-                break
+                return route.path
+    return "unmatched"
 
+
+@app.middleware("http")
+async def observe_requests(request: Request, call_next):
+    global request_counter
+    incoming = request.headers.get("X-Request-ID", "")
+    request_id = incoming if REQUEST_ID_RE.match(incoming) else str(uuid.uuid4())
+    request_id_var.set(request_id)
+    transport_var.set("http")
+    request.state.request_id = request_id
+
+    method = request.method
+    endpoint = route_template(request)
+    start = time.perf_counter()
+    in_flight = http_requests_in_flight.labels(method=method, endpoint=endpoint)
+    in_flight.inc()
+    try:
+        fault = None
+        if not request.url.path.startswith(NO_FAULT_PATHS):
+            fault = faults.current_fault()
+            if FAULT_INJECTION:
+                request_counter += 1
+                if request_counter % 5 == 0:
+                    await asyncio.sleep(0.5)
+                    logger.warning("fault_injected", extra={"fault": "latency", "delay_ms": 500})
+                if request_counter % 7 == 0:
+                    fault = "error"
+
+        if fault == "error":
+            logger.warning("fault_injected", extra={"fault": "error", "status": 503})
+            response = problem(503, "service-unavailable", "Service unavailable",
+                               "Injected server failure", request)
+        else:
+            try:
+                response = await call_next(request)
+            except Exception:
+                logger.exception("unhandled_error")
+                response = problem(500, "internal-error", "Internal server error",
+                                   "Unexpected error; see logs with this request_id", request)
+            if fault == "slow":
+                logger.warning("fault_injected", extra={"fault": "slow", "delay_ms": faults.SLOW_DELAY_S * 1000})
+                await asyncio.sleep(faults.SLOW_DELAY_S)
+    finally:
+        in_flight.dec()
+
+    duration = time.perf_counter() - start
     if endpoint != "/metrics":
-        http_requests_total.labels(
-            method=method, endpoint=endpoint, status=str(response.status_code)
-        ).inc()
-        http_request_duration_seconds.labels(method=method, endpoint=endpoint).observe(
-            duration
-        )
+        http_requests_total.labels(method=method, endpoint=endpoint, status=str(response.status_code)).inc()
+        http_request_duration_seconds.labels(method=method, endpoint=endpoint).observe(duration)
 
     response.headers["X-Request-ID"] = request_id
     response.headers["X-Response-Time-Ms"] = f"{duration * 1000:.2f}"
@@ -108,6 +207,45 @@ async def attach_request_id(request: Request, call_next):
     return response
 
 
+# ── OpenAPI helpers ───────────────────────────────────────────────────────
+
+
+def errors_doc(*codes: int) -> dict:
+    descriptions = {
+        404: "Resource not found",
+        409: "Conflict with the current state (empty cart, not enough stock, bad status change)",
+        422: "Invalid input (body, path, query or header)",
+        429: "Rate limit exceeded; see Retry-After",
+        503: "Service unavailable (dependency down or injected fault)",
+    }
+    out = {}
+    for code in codes:
+        out[code] = {
+            "description": descriptions[code],
+            "content": {"application/problem+json": {"schema": {"$ref": "#/components/schemas/Problem"}}},
+        }
+    if 429 in codes:
+        out[429]["headers"] = {"Retry-After": {"description": "Seconds until calls are accepted again", "schema": {"type": "integer"}}}
+    return out
+
+
+def custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+    schema = get_openapi(title=app.title, version=app.version, description=app.description, routes=app.routes)
+    problem_schema = Problem.model_json_schema(ref_template="#/components/schemas/{model}")
+    components = schema.setdefault("components", {}).setdefault("schemas", {})
+    components.update(problem_schema.pop("$defs", {}))
+    components["Problem"] = problem_schema
+    app.openapi_schema = schema
+    return schema
+
+
+app.openapi = custom_openapi
+
+CART_ID_PATH = {"pattern": r"^[A-Za-z0-9_-]{1,64}$", "examples": ["cart-42"]}
+
+
 # ── Health ────────────────────────────────────────────────────────────────
 
 
@@ -119,246 +257,100 @@ def health():
 # ── Products ──────────────────────────────────────────────────────────────
 
 
-@app.get("/products", tags=["products"])
+@app.get("/products", tags=["products"], response_model=list[Product], responses=errors_doc(422))
 def list_products(category: str | None = None):
-    return store.list_products(category)
+    return svc.list_products(category)
 
 
-@app.get("/products/{product_id}", tags=["products"])
-def get_product(product_id: str, request: Request):
-    product = store.get_product(product_id)
-    if not product:
-        logger.warning(
-            "product_not_found",
-            extra={
-                "request_id": request.state.request_id,
-                "product_id": product_id
-            },
-        )
-        raise HTTPException(status_code=404, detail="Product not found")
-    return product
+@app.get("/products/{product_id}", tags=["products"], response_model=Product, responses=errors_doc(404))
+def get_product(product_id: str):
+    return svc.get_product(product_id)
 
 
-# ── Cart ──────────────────────────────────────────────────────────────────
+# ── Carts ─────────────────────────────────────────────────────────────────
 
 
-@app.get("/cart/{cart_id}", tags=["cart"])
+@app.get("/carts/{cart_id}", tags=["carts"], response_model=Cart, responses=errors_doc(422))
 def get_cart(cart_id: str):
-    return store.get_cart(cart_id)
+    """Read a cart. An unknown cart id returns an empty cart and does not create anything."""
+    return svc.get_cart(cart_id)
 
 
-@app.post("/cart/{cart_id}/items", tags=["cart"])
-def add_to_cart(cart_id: str, item: CartItem, request: Request):
-    product = store.get_product(item.product_id)
-    if not product:
-        logger.warning(
-            "product_not_found",
-            extra={
-                "request_id": request.state.request_id,
-                "product_id": item.product_id
-            },
-        )
-        raise HTTPException(status_code=404, detail="Product not found")
-    if item.quantity < 1:
-        raise HTTPException(status_code=400, detail="Quantity must be at least 1")
-    if item.quantity > product.stock:
-        logger.warning(
-            "stock_empty",
-            extra={
-                "request_id": request.state.request_id,
-                "product_id": product.id
-            },
-        )
-        raise HTTPException(status_code=409, detail="Not enough stock")
-
-    cart = store.add_to_cart(cart_id, item)
-    active_carts.set(sum(1 for c in store._carts.values() if c))
-    
-    logger.info(
-        "item_added_to_cart",
-        extra={
-            "request_id": request.state.request_id,
-            "cart_id": cart.id,
-            "product_id": item.product_id
-        },
-    )
-    return cart
+@app.put("/carts/{cart_id}/items/{product_id}", tags=["carts"], response_model=Cart,
+         responses=errors_doc(404, 409, 422))
+def set_cart_item(cart_id: str, product_id: str, item: SetCartItem):
+    """Set the quantity of a product in the cart. Idempotent: repeating it leaves the same cart."""
+    return svc.set_cart_item(cart_id, product_id, item.quantity)
 
 
-@app.delete("/cart/{cart_id}/items/{product_id}", tags=["cart"])
-def remove_from_cart(cart_id: str, product_id: str):
-    cart = store.remove_from_cart(cart_id, product_id)
-    active_carts.set(sum(1 for c in store._carts.values() if c))
-    return cart
+@app.delete("/carts/{cart_id}/items/{product_id}", tags=["carts"], status_code=204,
+            responses=errors_doc(422))
+def remove_cart_item(cart_id: str, product_id: str):
+    """Remove a product from the cart. Idempotent: removing a missing item also returns 204."""
+    svc.remove_cart_item(cart_id, product_id)
+    return Response(status_code=204)
 
 
 # ── Orders ────────────────────────────────────────────────────────────────
 
 
-@app.post("/orders", tags=["orders"], status_code=201)
-def place_order(cart_id: str, request: Request):
-    order = store.create_order(cart_id)
+def limit_orders(request: Request) -> int:
+    try:
+        return orders_limiter.hit(request.client.host if request.client else "unknown")
+    except RateLimited:
+        http_rate_limited_total.labels(endpoint="/orders").inc()
+        logger.warning("rate_limited", extra={"endpoint": "/orders"})
+        raise
 
-    if not order:
-        logger.warning(
-            "empty_cart_or_insufficient_stock",
-            extra={
-                "request_id": request.state.request_id,
-                "cart_id": cart_id
+
+@app.post(
+    "/orders", tags=["orders"], status_code=201, response_model=Order,
+    responses={
+        **errors_doc(404, 409, 422, 429, 503),
+        201: {
+            "description": "Order created, or the original order replayed for a repeated Idempotency-Key",
+            "headers": {
+                "Location": {"description": "URL of the order", "schema": {"type": "string"}},
+                "Idempotent-Replayed": {"description": "`true` when this is a replay", "schema": {"type": "string"}},
+                "X-RateLimit-Remaining": {"description": "Calls left in the current window", "schema": {"type": "integer"}},
             },
-        )
-        raise HTTPException(
-            status_code=400, detail="Cart is empty or insufficient stock"
-        )
-
-    orders_placed_total.inc()
-    orders_pending.inc()
-    order_value_dollars.observe(order.total)
-    active_carts.set(sum(1 for c in store._carts.values() if c))
-
-    logger.info(
-        "order_placed",
-        extra={
-            "request_id": request.state.request_id,
-            "order_id": order.id,
-            "total": order.total
         },
-    )
+    },
+)
+def place_order(
+    body: PlaceOrderRequest,
+    response: Response,
+    remaining: Annotated[int, Depends(limit_orders)],
+    idempotency_key: Annotated[str | None, Header(
+        alias="Idempotency-Key", min_length=1, max_length=128,
+        description="Unique per checkout attempt (e.g. a UUID). Retries with the same key never create a second order.",
+    )] = None,
+):
+    """Place an order from a cart (rate limited per client IP)."""
+    order, replayed = svc.place_order(body.cart_id, idempotency_key, transport="http")
+    response.headers["Location"] = f"/orders/{order.id}"
+    response.headers["X-RateLimit-Limit"] = str(ORDERS_RATE_LIMIT)
+    response.headers["X-RateLimit-Remaining"] = str(remaining)
+    if replayed:
+        response.headers["Idempotent-Replayed"] = "true"
     return order
 
 
-@app.get("/orders", tags=["orders"])
+@app.get("/orders", tags=["orders"], response_model=list[Order], responses=errors_doc(422))
 def list_orders(status: OrderStatus | None = None):
-    return store.list_orders(status)
+    return svc.list_orders(status)
 
 
-@app.get("/orders/{order_id}", tags=["orders"])
-def get_order(order_id: str, request: Request):
-    order = store.get_order(order_id)
-    if not order:
-        logger.warning(
-            "order_not_found",
-            extra={
-                "request_id": request.state.request_id,
-                "order_id": order_id
-            },
-        )
-        raise HTTPException(status_code=404, detail="Order not found")
-    return order
+@app.get("/orders/{order_id}", tags=["orders"], response_model=Order, responses=errors_doc(404))
+def get_order(order_id: str):
+    return svc.get_order(order_id)
 
 
-@app.put("/orders/{order_id}/confirm", tags=["orders"])
-def confirm_order(order_id: str, request: Request):
-    order = store.get_order(order_id)
-    if not order:
-        logger.warning(
-            "order_not_found",
-            extra={
-                "request_id": request.state.request_id,
-                "order_id": order_id
-            },
-        )
-        raise HTTPException(status_code=404, detail="Order not found")
-    if order.status != OrderStatus.PENDING:
-        logger.warning(
-            "status_update_failed",
-            extra={
-                "request_id": request.state.request_id,
-                "order_id": order_id
-            },
-        )
-        raise HTTPException(
-            status_code=409, detail=f"Cannot confirm order with status '{order.status}'"
-        )
-
-    order = store.update_order_status(order_id, OrderStatus.CONFIRMED)
-    orders_pending.dec()
-    return order
-
-
-@app.put("/orders/{order_id}/ship", tags=["orders"])
-def ship_order(order_id: str, request: Request):
-    order = store.get_order(order_id)
-    if not order:
-        logger.warning(
-            "order_not_found",
-            extra={
-                "request_id": request.state.request_id,
-                "order_id": order_id
-            },
-        )
-        raise HTTPException(status_code=404, detail="Order not found")
-    if order.status != OrderStatus.CONFIRMED:
-        logger.warning(
-            "status_update_failed",
-            extra={
-                "request_id": request.state.request_id,
-                "order_id": order_id
-            },
-        )
-        raise HTTPException(
-            status_code=409, detail=f"Cannot ship order with status '{order.status}'"
-        )
-    return store.update_order_status(order_id, OrderStatus.SHIPPED)
-
-
-@app.put("/orders/{order_id}/deliver", tags=["orders"])
-def deliver_order(order_id: str, request: Request):
-    order = store.get_order(order_id)
-    if not order:
-        raise HTTPException(status_code=404, detail="Order not found")
-    if order.status != OrderStatus.SHIPPED:
-        logger.warning(
-            "status_update_failed",
-            extra={
-                "request_id": request.state.request_id,
-                "order_id": order_id
-            },
-        )
-        raise HTTPException(
-            status_code=409, detail=f"Cannot deliver order with status '{order.status}'"
-        )
-
-    return store.update_order_status(order_id, OrderStatus.DELIVERED)
-
-
-@app.put("/orders/{order_id}/cancel", tags=["orders"])
-def cancel_order(order_id: str, request: Request):
-    order = store.get_order(order_id)
-    if not order:
-        logger.warning(
-            "order_not_found",
-            extra={
-                "request_id": request.state.request_id,
-                "order_id": order_id
-            },
-        )
-        raise HTTPException(status_code=404, detail="Order not found")
-    if order.status in (OrderStatus.DELIVERED, OrderStatus.CANCELLED):
-        logger.warning(
-            "status_update_failed",
-            extra={
-                "request_id": request.state.request_id,
-                "order_id": order_id
-            },
-        )
-        raise HTTPException(
-            status_code=409, detail=f"Cannot cancel order with status '{order.status}'"
-        )
-
-    if order.status == OrderStatus.PENDING:
-        orders_pending.dec()
-    order = store.cancel_order(order_id)
-    orders_cancelled_total.inc()
-    
-    logger.info(
-        "order_cancelled",
-        extra={
-            "request_id": request.state.request_id,
-            "order_id": order.id,
-        },
-    )
-    return order
+@app.patch("/orders/{order_id}", tags=["orders"], response_model=Order, responses=errors_doc(404, 409, 422))
+def update_order_status(order_id: str, body: UpdateOrderStatus):
+    """Move an order along PENDING → CONFIRMED → SHIPPED → DELIVERED, or CANCELLED before delivery.
+    Asking for the status it already has returns the order unchanged."""
+    return svc.change_order_status(order_id, body.status)
 
 
 # ── Stats ─────────────────────────────────────────────────────────────────
@@ -366,10 +358,29 @@ def cancel_order(order_id: str, request: Request):
 
 @app.get("/stats", tags=["ops"])
 def get_stats():
-    return store.get_stats()
+    return svc.get_stats()
 
 
-# ── Cardinality Demo (Part E.2) ──────────────────────────────────────────
+# ── Fault switch for the reliability demo ────────────────────────────────
+
+
+class FaultRequest(BaseModel):
+    mode: str = Field(pattern="^(error|slow|off)$", examples=["error"])
+    duration_s: float = Field(default=10, gt=0, le=300)
+
+
+@app.post("/admin/faults", tags=["testing"], responses=errors_doc(404, 422))
+def set_fault(body: FaultRequest):
+    """Turn on a temporary fault (needs ENABLE_FAULT_ADMIN=true). `error` returns 503;
+    `slow` runs the request then delays the response past the client's timeout."""
+    if not faults.ADMIN_ENABLED:
+        raise StarletteHTTPException(404, "Not Found")
+    faults.set_fault(body.mode, body.duration_s)
+    logger.warning("fault_switched", extra={"fault": body.mode, "duration_s": body.duration_s})
+    return {"mode": body.mode, "expires_in_ms": faults.remaining_ms()}
+
+
+# ── Cardinality Demo (A1 Part E.2) ────────────────────────────────────────
 
 
 @app.post("/demo/cardinality", tags=["demo"])
@@ -390,7 +401,7 @@ def cardinality_demo(mode: str = "good", count: int = 100):
     }
 
 
-# ── Metrics ─────────────────────────────────────────────────────────────────
+# ── Metrics ───────────────────────────────────────────────────────────────
 
 
 @app.get("/metrics", tags=["ops"])

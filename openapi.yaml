@@ -1,0 +1,781 @@
+openapi: 3.1.0
+info:
+  title: Online Store API
+  description: Online store HTTP API (ESD Assignment 2). Every error uses RFC 9457
+    problem details (`application/problem+json`). Each response carries `X-Request-ID`;
+    send your own to correlate logs across services.
+  version: 2.0.0
+paths:
+  /health:
+    get:
+      tags:
+      - ops
+      summary: Health
+      operationId: health_health_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+  /products:
+    get:
+      tags:
+      - products
+      summary: List Products
+      operationId: list_products_products_get
+      parameters:
+      - name: category
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Category
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Product'
+                title: Response List Products Products Get
+        '422':
+          description: Invalid input (body, path, query or header)
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+  /products/{product_id}:
+    get:
+      tags:
+      - products
+      summary: Get Product
+      operationId: get_product_products__product_id__get
+      parameters:
+      - name: product_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Product Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Product'
+        '404':
+          description: Resource not found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /carts/{cart_id}:
+    get:
+      tags:
+      - carts
+      summary: Get Cart
+      description: Read a cart. An unknown cart id returns an empty cart and does
+        not create anything.
+      operationId: get_cart_carts__cart_id__get
+      parameters:
+      - name: cart_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Cart Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Cart'
+        '422':
+          description: Invalid input (body, path, query or header)
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+  /carts/{cart_id}/items/{product_id}:
+    put:
+      tags:
+      - carts
+      summary: Set Cart Item
+      description: 'Set the quantity of a product in the cart. Idempotent: repeating
+        it leaves the same cart.'
+      operationId: set_cart_item_carts__cart_id__items__product_id__put
+      parameters:
+      - name: cart_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Cart Id
+      - name: product_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Product Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetCartItem'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Cart'
+        '404':
+          description: Resource not found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '409':
+          description: Conflict with the current state (empty cart, not enough stock,
+            bad status change)
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '422':
+          description: Invalid input (body, path, query or header)
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+    delete:
+      tags:
+      - carts
+      summary: Remove Cart Item
+      description: 'Remove a product from the cart. Idempotent: removing a missing
+        item also returns 204.'
+      operationId: remove_cart_item_carts__cart_id__items__product_id__delete
+      parameters:
+      - name: cart_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Cart Id
+      - name: product_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Product Id
+      responses:
+        '204':
+          description: Successful Response
+        '422':
+          description: Invalid input (body, path, query or header)
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+  /orders:
+    post:
+      tags:
+      - orders
+      summary: Place Order
+      description: Place an order from a cart (rate limited per client IP).
+      operationId: place_order_orders_post
+      parameters:
+      - name: Idempotency-Key
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+            minLength: 1
+            maxLength: 128
+          - type: 'null'
+          description: Unique per checkout attempt (e.g. a UUID). Retries with the
+            same key never create a second order.
+          title: Idempotency-Key
+        description: Unique per checkout attempt (e.g. a UUID). Retries with the same
+          key never create a second order.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlaceOrderRequest'
+      responses:
+        '201':
+          description: Order created, or the original order replayed for a repeated
+            Idempotency-Key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+          headers:
+            Location:
+              description: URL of the order
+              schema:
+                type: string
+            Idempotent-Replayed:
+              description: '`true` when this is a replay'
+              schema:
+                type: string
+            X-RateLimit-Remaining:
+              description: Calls left in the current window
+              schema:
+                type: integer
+        '404':
+          description: Resource not found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '409':
+          description: Conflict with the current state (empty cart, not enough stock,
+            bad status change)
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '422':
+          description: Invalid input (body, path, query or header)
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '429':
+          description: Rate limit exceeded; see Retry-After
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+          headers:
+            Retry-After:
+              description: Seconds until calls are accepted again
+              schema:
+                type: integer
+        '503':
+          description: Service unavailable (dependency down or injected fault)
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+    get:
+      tags:
+      - orders
+      summary: List Orders
+      operationId: list_orders_orders_get
+      parameters:
+      - name: status
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - $ref: '#/components/schemas/OrderStatus'
+          - type: 'null'
+          title: Status
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Order'
+                title: Response List Orders Orders Get
+        '422':
+          description: Invalid input (body, path, query or header)
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+  /orders/{order_id}:
+    get:
+      tags:
+      - orders
+      summary: Get Order
+      operationId: get_order_orders__order_id__get
+      parameters:
+      - name: order_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Order Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+        '404':
+          description: Resource not found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    patch:
+      tags:
+      - orders
+      summary: Update Order Status
+      description: 'Move an order along PENDING → CONFIRMED → SHIPPED → DELIVERED,
+        or CANCELLED before delivery.
+
+        Asking for the status it already has returns the order unchanged.'
+      operationId: update_order_status_orders__order_id__patch
+      parameters:
+      - name: order_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Order Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateOrderStatus'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+        '404':
+          description: Resource not found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '409':
+          description: Conflict with the current state (empty cart, not enough stock,
+            bad status change)
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '422':
+          description: Invalid input (body, path, query or header)
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+  /stats:
+    get:
+      tags:
+      - ops
+      summary: Get Stats
+      operationId: get_stats_stats_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+  /admin/faults:
+    post:
+      tags:
+      - testing
+      summary: Set Fault
+      description: 'Turn on a temporary fault (needs ENABLE_FAULT_ADMIN=true). `error`
+        returns 503;
+
+        `slow` runs the request then delays the response past the client''s timeout.'
+      operationId: set_fault_admin_faults_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FaultRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '404':
+          description: Resource not found
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+        '422':
+          description: Invalid input (body, path, query or header)
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+  /demo/cardinality:
+    post:
+      tags:
+      - demo
+      summary: Cardinality Demo
+      description: 'mode=good: increments a single counter (1 time series)
+
+        mode=bad: increments a counter with a unique request_id label per call (N
+        time series)'
+      operationId: cardinality_demo_demo_cardinality_post
+      parameters:
+      - name: mode
+        in: query
+        required: false
+        schema:
+          type: string
+          default: good
+          title: Mode
+      - name: count
+        in: query
+        required: false
+        schema:
+          type: integer
+          default: 100
+          title: Count
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /metrics:
+    get:
+      tags:
+      - ops
+      summary: Get Metrics
+      operationId: get_metrics_metrics_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+components:
+  schemas:
+    Cart:
+      properties:
+        id:
+          type: string
+          title: Id
+        items:
+          items:
+            $ref: '#/components/schemas/CartItemResponse'
+          type: array
+          title: Items
+        total:
+          type: number
+          title: Total
+      type: object
+      required:
+      - id
+      - items
+      - total
+      title: Cart
+    CartItemResponse:
+      properties:
+        product_id:
+          type: string
+          title: Product Id
+        name:
+          type: string
+          title: Name
+        price:
+          type: number
+          title: Price
+        quantity:
+          type: integer
+          title: Quantity
+        subtotal:
+          type: number
+          title: Subtotal
+      type: object
+      required:
+      - product_id
+      - name
+      - price
+      - quantity
+      - subtotal
+      title: CartItemResponse
+    FaultRequest:
+      properties:
+        mode:
+          type: string
+          pattern: ^(error|slow|off)$
+          title: Mode
+          examples:
+          - error
+        duration_s:
+          type: number
+          maximum: 300.0
+          exclusiveMinimum: 0.0
+          title: Duration S
+          default: 10
+      type: object
+      required:
+      - mode
+      title: FaultRequest
+    HTTPValidationError:
+      properties:
+        detail:
+          items:
+            $ref: '#/components/schemas/ValidationError'
+          type: array
+          title: Detail
+      type: object
+      title: HTTPValidationError
+    Order:
+      properties:
+        id:
+          type: string
+          title: Id
+        cart_id:
+          type: string
+          title: Cart Id
+        items:
+          items:
+            $ref: '#/components/schemas/OrderItem'
+          type: array
+          title: Items
+        total:
+          type: number
+          title: Total
+        status:
+          $ref: '#/components/schemas/OrderStatus'
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+        updated_at:
+          type: string
+          format: date-time
+          title: Updated At
+      type: object
+      required:
+      - id
+      - cart_id
+      - items
+      - total
+      - status
+      - created_at
+      - updated_at
+      title: Order
+    OrderItem:
+      properties:
+        product_id:
+          type: string
+          title: Product Id
+        name:
+          type: string
+          title: Name
+        price:
+          type: number
+          title: Price
+        quantity:
+          type: integer
+          title: Quantity
+        subtotal:
+          type: number
+          title: Subtotal
+      type: object
+      required:
+      - product_id
+      - name
+      - price
+      - quantity
+      - subtotal
+      title: OrderItem
+    OrderStatus:
+      type: string
+      enum:
+      - pending
+      - confirmed
+      - shipped
+      - delivered
+      - cancelled
+      title: OrderStatus
+    PlaceOrderRequest:
+      properties:
+        cart_id:
+          type: string
+          maxLength: 64
+          minLength: 1
+          pattern: ^[A-Za-z0-9_-]+$
+          title: Cart Id
+          examples:
+          - cart-42
+      additionalProperties: false
+      type: object
+      required:
+      - cart_id
+      title: PlaceOrderRequest
+    Product:
+      properties:
+        id:
+          type: string
+          title: Id
+        name:
+          type: string
+          title: Name
+        description:
+          type: string
+          title: Description
+        category:
+          type: string
+          title: Category
+        price:
+          type: number
+          title: Price
+        stock:
+          type: integer
+          title: Stock
+      type: object
+      required:
+      - id
+      - name
+      - description
+      - category
+      - price
+      - stock
+      title: Product
+    SetCartItem:
+      properties:
+        quantity:
+          type: integer
+          maximum: 100.0
+          minimum: 1.0
+          title: Quantity
+          examples:
+          - 2
+      additionalProperties: false
+      type: object
+      required:
+      - quantity
+      title: SetCartItem
+      description: 'Body for PUT /carts/{cart_id}/items/{product_id}: sets (not adds)
+        the quantity.'
+    UpdateOrderStatus:
+      properties:
+        status:
+          $ref: '#/components/schemas/OrderStatus'
+          examples:
+          - confirmed
+      additionalProperties: false
+      type: object
+      required:
+      - status
+      title: UpdateOrderStatus
+    ValidationError:
+      properties:
+        loc:
+          items:
+            anyOf:
+            - type: string
+            - type: integer
+          type: array
+          title: Location
+        msg:
+          type: string
+          title: Message
+        type:
+          type: string
+          title: Error Type
+      type: object
+      required:
+      - loc
+      - msg
+      - type
+      title: ValidationError
+    FieldError:
+      properties:
+        field:
+          title: Field
+          type: string
+        message:
+          title: Message
+          type: string
+      required:
+      - field
+      - message
+      title: FieldError
+      type: object
+    Problem:
+      description: RFC 9457 problem details, used for every error response.
+      properties:
+        type:
+          examples:
+          - /problems/insufficient-stock
+          title: Type
+          type: string
+        title:
+          examples:
+          - Not enough stock
+          title: Title
+          type: string
+        status:
+          examples:
+          - 409
+          title: Status
+          type: integer
+        detail:
+          examples:
+          - Only 3 of 'p1' left
+          title: Detail
+          type: string
+        instance:
+          examples:
+          - /orders
+          title: Instance
+          type: string
+        request_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: null
+          title: Request Id
+        errors:
+          anyOf:
+          - items:
+              $ref: '#/components/schemas/FieldError'
+            type: array
+          - type: 'null'
+          default: null
+          title: Errors
+      required:
+      - type
+      - title
+      - status
+      - detail
+      - instance
+      title: Problem
+      type: object
