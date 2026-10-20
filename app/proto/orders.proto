@@ -1,0 +1,63 @@
+// Order service for the online store (ESD Assignment 2, Part B).
+//
+// Generate Python code (run from the app/ directory):
+//   python -m grpc_tools.protoc -I proto --python_out=gen --pyi_out=gen --grpc_python_out=gen proto/orders.proto
+
+syntax = "proto3";
+
+package store.v1;
+
+import "google/protobuf/timestamp.proto";
+
+service OrderService {
+  // Turn a cart into a pending order. Same rules and data as HTTP POST /orders.
+  //
+  // Errors (status code -> meaning, the trailing metadata "error-type" holds
+  // the same value as the HTTP problem "type"):
+  //   INVALID_ARGUMENT    bad cart_id / idempotency_key, or key reused for another cart
+  //   NOT_FOUND           a product in the cart no longer exists
+  //   FAILED_PRECONDITION cart empty, or not enough stock
+  //   ABORTED             a request with the same idempotency_key is still running
+  //   UNAVAILABLE         the store (Redis) is unreachable
+  //   DEADLINE_EXCEEDED   the client's deadline passed
+  rpc PlaceOrder(PlaceOrderRequest) returns (PlaceOrderResponse);
+}
+
+message PlaceOrderRequest {
+  string cart_id = 1;
+  // Optional. Retrying with the same key never creates a second order.
+  string idempotency_key = 2;
+}
+
+message PlaceOrderResponse {
+  Order order = 1;
+  // True when the order was created by an earlier call with the same key.
+  bool replayed = 2;
+}
+
+enum OrderStatus {
+  ORDER_STATUS_UNSPECIFIED = 0;
+  PENDING = 1;
+  CONFIRMED = 2;
+  SHIPPED = 3;
+  DELIVERED = 4;
+  CANCELLED = 5;
+}
+
+message OrderItem {
+  string product_id = 1;
+  string name = 2;
+  double price = 3;
+  int32 quantity = 4;
+  double subtotal = 5;
+}
+
+message Order {
+  string id = 1;
+  string cart_id = 2;
+  repeated OrderItem items = 3;
+  double total = 4;
+  OrderStatus status = 5;
+  google.protobuf.Timestamp created_at = 6;
+  google.protobuf.Timestamp updated_at = 7;
+}
