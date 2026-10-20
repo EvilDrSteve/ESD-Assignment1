@@ -1,0 +1,137 @@
+### request id used on both transports: trace-demo-2906
+### HTTP: fill cart
+{"id":"ex-cart","items":[{"product_id":"p3","name":"USB-C Hub","price":45.99,"quantity":1,"subtotal":45.99}],"total":45.99}
+### HTTP success: POST /orders
+HTTP/1.1 201 Created
+date: Tue, 20 Oct 2026 13:18:23 GMT
+server: uvicorn
+content-length: 282
+content-type: application/json
+location: /orders/afd07f77-f68d-4d42-a5b8-73b577d1fc50
+x-ratelimit-limit: 5
+x-ratelimit-remaining: 4
+x-request-id: 48a0d9bb-6986-413f-bdb4-55c50e6f1d65
+x-response-time-ms: 4.00
+
+{"id":"afd07f77-f68d-4d42-a5b8-73b577d1fc50","cart_id":"ex-http","items":[{"product_id":"p1","name":"Wireless Mouse","price":29.99,"quantity":1,"subtotal":29.99}],"total":29.99,"status":"pending","created_at":"2026-10-20T13:18:24.521879Z","updated_at":"2026-10-20T13:18:24.521879Z"}
+### HTTP failure: empty cart
+HTTP/1.1 409 Conflict
+date: Tue, 20 Oct 2026 13:18:23 GMT
+server: uvicorn
+content-length: 219
+content-type: application/problem+json
+x-request-id: 79dcdb23-b839-4042-abec-0f3809b9562f
+x-response-time-ms: 2.32
+
+{"type":"/problems/cart-empty","title":"Cart is empty","status":409,"detail":"Cart is empty or does not exist; add items before placing an order","instance":"/orders","request_id":"79dcdb23-b839-4042-abec-0f3809b9562f"}
+### HTTP failure: invalid input
+HTTP/1.1 422 Unprocessable Entity
+date: Tue, 20 Oct 2026 13:18:23 GMT
+server: uvicorn
+content-length: 284
+content-type: application/problem+json
+x-request-id: 1ecb63ee-e2e7-4e5a-8e87-d03337b203fe
+x-response-time-ms: 1.85
+
+{"type":"/problems/validation-error","title":"Invalid input","status":422,"detail":"The request has invalid fields","instance":"/orders","request_id":"1ecb63ee-e2e7-4e5a-8e87-d03337b203fe","errors":[{"field":"body.cart_id","message":"String should match pattern '^[A-Za-z0-9_-]+$'"}]}
+### HTTP failure: not enough stock (p9 has 3 left)
+HTTP/1.1 409 Conflict
+date: Tue, 20 Oct 2026 13:18:23 GMT
+server: uvicorn
+content-length: 198
+content-type: application/problem+json
+x-request-id: d5c44124-ac70-45cd-8aa2-dc11651b9ea6
+x-response-time-ms: 1.75
+
+{"type":"/problems/insufficient-stock","title":"Not enough stock","status":409,"detail":"Only 3 of 'p9' left","instance":"/carts/ex-mug/items/p9","request_id":"d5c44124-ac70-45cd-8aa2-dc11651b9ea6"}
+### gRPC success (same request id as the HTTP cart call)
+{
+  "ok": true,
+  "grpc_code": "OK",
+  "replayed": false,
+  "order": {
+    "id": "1d03bb12-0b61-4e7a-ad55-ce463eadcbba",
+    "cart_id": "ex-cart",
+    "items": [
+      {
+        "product_id": "p3",
+        "name": "USB-C Hub",
+        "price": 45.99,
+        "quantity": 1,
+        "subtotal": 45.99
+      }
+    ],
+    "total": 45.99,
+    "status": "PENDING",
+    "created_at": "2026-10-20T13:18:24.666112Z",
+    "updated_at": "2026-10-20T13:18:24.666112Z"
+  },
+  "request_id": "trace-demo-2906",
+  "elapsed_ms": 10.3
+}
+### gRPC repeat with same key
+{
+  "ok": true,
+  "grpc_code": "OK",
+  "replayed": true,
+  "order": {
+    "id": "1d03bb12-0b61-4e7a-ad55-ce463eadcbba",
+    "cart_id": "ex-cart",
+    "items": [
+      {
+        "product_id": "p3",
+        "name": "USB-C Hub",
+        "price": 45.99,
+        "quantity": 1,
+        "subtotal": 45.99
+      }
+    ],
+    "total": 45.99,
+    "status": "PENDING",
+    "created_at": "2026-10-20T13:18:24.666112Z",
+    "updated_at": "2026-10-20T13:18:24.666112Z"
+  },
+  "request_id": "grpc-cli-5bd25746-8c48-4945-9fca-442c757b3998",
+  "elapsed_ms": 6.3
+}
+### gRPC failure: empty cart
+{
+  "ok": false,
+  "grpc_code": "FAILED_PRECONDITION",
+  "details": "Cart is empty or does not exist; add items before placing an order",
+  "error_type": "cart-empty",
+  "request_id": "grpc-cli-c589c938-fa51-48c3-9c6d-01e480f4b4e3",
+  "elapsed_ms": 4.6
+}
+### gRPC failure: invalid input
+{
+  "ok": false,
+  "grpc_code": "INVALID_ARGUMENT",
+  "details": "cart_id must be 1-64 characters: letters, digits, '-' or '_'",
+  "error_type": "validation-error",
+  "request_id": "grpc-cli-62f4584f-feb1-4b02-bd66-73c0d048b95c",
+  "elapsed_ms": 5.3
+}
+### gRPC failure: deadline exceeded (1 ms deadline)
+{
+  "ok": false,
+  "grpc_code": "DEADLINE_EXCEEDED",
+  "details": "Deadline Exceeded",
+  "error_type": null,
+  "request_id": "grpc-cli-b1ce883b-48d6-460b-a595-e16d53d633d3",
+  "elapsed_ms": 3.7
+}
+### gRPC failure: service down
+{
+  "ok": false,
+  "grpc_code": "UNAVAILABLE",
+  "details": "failed to connect to all addresses; last error: UNKNOWN: ipv4:127.0.0.1:50051: Failed to connect to remote host: connect: Connection refused (111)",
+  "error_type": null,
+  "request_id": "grpc-cli-bddef402-4438-4737-b351-a34ca442ffbc",
+  "elapsed_ms": 3.3
+}
+### Elasticsearch: every log line with request_id=trace-demo-2906
+{"@timestamp": "2026-10-20T13:18:24.606Z", "transport": "http", "message": "item_set_in_cart", "service": "store-api"}
+{"@timestamp": "2026-10-20T13:18:24.606Z", "endpoint": "/carts/{cart_id}/items/{product_id}", "message": "request", "duration_ms": 2.64, "transport": "http", "service": "store-api", "status": 200}
+{"@timestamp": "2026-10-20T13:18:26.494Z", "order_id": "1d03bb12-0b61-4e7a-ad55-ce463eadcbba", "message": "order_placed", "transport": "grpc", "service": "store-grpc"}
+{"@timestamp": "2026-10-20T13:18:26.495Z", "transport": "grpc", "rpc_method": "/store.v1.OrderService/PlaceOrder", "duration_ms": 2.98, "service": "store-grpc", "grpc_code": "OK", "message": "rpc"}

@@ -1,0 +1,11 @@
+18:17:42 call 1: HTTP/1.1 201 Created x-ratelimit-remaining: 4
+18:17:42 call 2: HTTP/1.1 201 Created x-ratelimit-remaining: 3
+18:17:42 call 3: HTTP/1.1 201 Created x-ratelimit-remaining: 2
+18:17:42 call 4: HTTP/1.1 201 Created x-ratelimit-remaining: 1
+18:17:42 call 5: HTTP/1.1 201 Created x-ratelimit-remaining: 0
+18:17:42 call 6: HTTP/1.1 429 Too Many Requests retry-after: 10 x-ratelimit-remaining: 0
+18:17:42 call 7: HTTP/1.1 429 Too Many Requests retry-after: 10 x-ratelimit-remaining: 0
+--- 429 body:
+{"type":"/problems/rate-limited","title":"Too many requests","status":429,"detail":"Rate limit of 5 requests per 10s exceeded","instance":"/orders","request_id":"aa5353ab-204f-433e-aa88-b26345232868"}
+18:17:42 waiting 10s (Retry-After) ...
+18:17:52 call after wait: HTTP/1.1 201 Created x-ratelimit-remaining: 4

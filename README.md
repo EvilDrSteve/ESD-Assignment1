@@ -1,147 +1,169 @@
-# Online Store API — ESD Assignment 1
+# Online Store API — ESD Assignments 1 & 2
 
-A simple online store API built with FastAPI with full observability: Prometheus metrics, Grafana dashboards, and an ELK logging pipeline.
+An online store with an HTTP API (FastAPI) and a gRPC service, sharing one Redis
+store, with Prometheus metrics, Grafana dashboards and an ELK logging pipeline.
+
+- **A1:** API, metrics, dashboards, logging pipeline (see `report.md`)
+- **A2:** improved HTTP API, OpenAPI spec, idempotency, rate limiting, reliable
+  Python caller, gRPC `PlaceOrder` service, extended metrics (see `report-a2.md`)
+
+```
+           HTTP :8050                          gRPC :50051
+ curl / http_caller.py ──► app (FastAPI) ─┐  ┌─ grpc-server ◄── grpc_client.py
+                                          ▼  ▼
+                              orders_service.py (shared rules)
+                                          │
+                                    Redis (source of truth)
+
+ Prometheus scrapes app:8050/metrics and grpc-server:9101 ──► Grafana :3000
+ app.log + grpc.log ──► Filebeat ──► Elasticsearch ──► Kibana :5601
+```
 
 ## Prerequisites
 
-- Docker and Docker Compose installed
-- Ports 8050, 9090, 9100, 3000, 9200, 5601 available
+- Docker with Docker Compose v2
+- Python 3.12 on the host for the tests and clients
+- Free ports: 8050, 50051, 9101, 9090, 9100, 3000, 9200, 5601
 
-## Setup and Run
-
-1. Clone the repository and navigate to the project directory:
-
-```bash
-cd esd/assignment-1
-```
-
-2. Build and start all services:
+## Run
 
 ```bash
-docker compose up --build
+docker compose up -d --build
 ```
 
-This starts 8 containers: the app, Prometheus, Grafana, Node Exporter, Elasticsearch, an ES init sidecar (creates the index template then exits), Kibana, and Filebeat.
-
-3. Wait about 30 seconds for all services to become healthy, then access:
+This starts 10 containers: `redis`, `app` (HTTP), `grpc-server`, Prometheus,
+Grafana, Node Exporter, Elasticsearch, `es-init` (creates the index template,
+then exits), Kibana and Filebeat. Give it about 30 s.
 
 | Service | URL |
 |---------|-----|
-| API | http://localhost:8050 |
-| API Docs (Swagger) | http://localhost:8050/docs |
+| HTTP API | http://localhost:8050 |
+| Swagger UI (OpenAPI) | http://localhost:8050/docs |
+| gRPC | localhost:50051 (`store.v1.OrderService`, reflection enabled) |
+| gRPC metrics | http://localhost:9101/metrics |
 | Prometheus | http://localhost:9090 |
 | Grafana | http://localhost:3000 (admin / admin) |
 | Kibana | http://localhost:5601 |
-| Metrics endpoint | http://localhost:8050/metrics |
 
-## Grafana Setup
+Grafana's Prometheus datasource and both dashboards (**Store → Online Store
+Dashboard** for A1, **Store → Store A2 — HTTP vs gRPC: Place order**) are
+provisioned from `grafana/`, so nothing has to be set up by hand.
 
-1. Open http://localhost:3000 and log in with `admin` / `admin`
-2. Go to **Connections → Data Sources → Add data source → Prometheus**
-3. Set URL to `http://prometheus:9090`, click **Save & Test**
-4. Create a dashboard and add panels using PromQL queries like:
-   - `rate(http_requests_total[1m])` — request rate
-   - `histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m]))` — p95 latency
-   - `active_carts` — current active carts gauge
-5. For Node Exporter metrics: import dashboard ID **1860**
+Kibana: create a data view `store-logs-*` with `@timestamp`, then search, e.g.
+`request_id : "trace-demo-1"` or `service : "store-grpc" and grpc_code : *`.
 
-## Kibana Setup
+Stop: `docker compose down` (add `-v` to delete the data volumes).
 
-1. Open http://localhost:5601
-2. Go to **Management → Data Views → Create data view**
-3. Name: `store-logs`, Index pattern: `store-logs-*`
-4. Go to **Discover** to search and filter logs
-5. Example KQL queries:
-   - `severity: WARNING` — show warnings
-   - `message: order_placed` — find order events
-   - `status: 500` — find server errors
-
-## API Endpoints
-
-### Products
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/products` | List all products (optional `?category=electronics`) |
-| GET | `/products/{id}` | Get a single product |
-
-### Cart
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/cart/{cart_id}` | View cart contents |
-| POST | `/cart/{cart_id}/items` | Add item to cart |
-| DELETE | `/cart/{cart_id}/items/{product_id}` | Remove item from cart |
-
-### Orders
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/orders?cart_id={cart_id}` | Place an order from a cart |
-| GET | `/orders` | List all orders (optional `?status=pending`) |
-| GET | `/orders/{id}` | Get a single order |
-| PUT | `/orders/{id}/confirm` | Confirm a pending order |
-| PUT | `/orders/{id}/ship` | Ship a confirmed order |
-| PUT | `/orders/{id}/deliver` | Mark a shipped order as delivered |
-| PUT | `/orders/{id}/cancel` | Cancel an order (if not delivered) |
-
-### Ops
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/health` | Health check |
-| GET | `/stats` | Order counts, revenue, active carts |
-| GET | `/metrics` | Prometheus metrics |
-| POST | `/demo/cardinality?mode=good&count=100` | Cardinality explosion demo |
-
-## Quick Test
+## Host environment (tests and clients)
 
 ```bash
-# Browse products
-curl -s http://localhost:8050/products | python3 -m json.tool
-
-# Add items to a cart
-curl -s -X POST http://localhost:8050/cart/my-cart/items \
-  -H "Content-Type: application/json" \
-  -d '{"product_id":"p1","quantity":2}' | python3 -m json.tool
-
-# View cart
-curl -s http://localhost:8050/cart/my-cart | python3 -m json.tool
-
-# Place an order
-curl -s -X POST "http://localhost:8050/orders?cart_id=my-cart" | python3 -m json.tool
-
-# Check stats
-curl -s http://localhost:8050/stats | python3 -m json.tool
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements-dev.txt
 ```
 
-## Fault Injection (Part E)
-
-To enable fault injection, set the environment variable in `docker-compose.yml`:
-
-```yaml
-environment:
-  - FAULT_INJECTION=true
-```
-
-Then rebuild:
+## Tests
 
 ```bash
-docker compose up --build
+pytest -q          # 37 tests: HTTP API, gRPC, caller, OpenAPI contract
 ```
 
-This injects:
-- **500ms latency** on every 5th request
-- **HTTP 500 errors** on every 7th request
+Tests use an in-memory Redis (fakeredis) and an in-process gRPC server, so the
+stack does not need to be running.
 
-Both faults are visible in Grafana dashboards and Kibana logs.
+| File | Covers |
+|------|--------|
+| `tests/test_http_api.py` | valid requests, invalid input, repeated requests (idempotency), 429 + Retry-After, faults, request ids |
+| `tests/test_grpc.py` | gRPC success, FAILED_PRECONDITION, INVALID_ARGUMENT, shared data and idempotency with HTTP, gRPC metrics |
+| `tests/test_caller.py` | retry/backoff, no retry when unsafe, circuit breaker open → half-open → closed |
+| `tests/test_openapi.py`, `tests/test_contract.py` | `openapi.yaml` matches the code; live responses validated against the spec |
 
-## Order Workflow
+## HTTP API (A2)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/products?category=` | List products |
+| GET | `/products/{product_id}` | One product (404 if unknown) |
+| GET | `/carts/{cart_id}` | Read a cart (unknown id → empty cart, nothing created) |
+| PUT | `/carts/{cart_id}/items/{product_id}` | Set quantity `{"quantity": n}` (idempotent) |
+| DELETE | `/carts/{cart_id}/items/{product_id}` | Remove item, 204 (idempotent) |
+| POST | `/orders` | Place order `{"cart_id": ...}`, optional `Idempotency-Key` header, rate limited |
+| GET | `/orders?status=` | List orders |
+| GET | `/orders/{order_id}` | One order |
+| PATCH | `/orders/{order_id}` | Change status `{"status": "confirmed"}` |
+| GET | `/stats`, `/health`, `/metrics` | Ops |
+| POST | `/admin/faults` | Demo only: `{"mode": "error"\|"slow"\|"off", "duration_s": 10}` |
+
+All errors are `application/problem+json` (RFC 9457) with `type`, `title`,
+`status`, `detail`, `instance`, `request_id` and, for validation, `errors`.
+
+```bash
+curl -s -X PUT localhost:8050/carts/my-cart/items/p1 -H "Content-Type: application/json" -d '{"quantity":2}'
+curl -si -X POST localhost:8050/orders -H "Content-Type: application/json" \
+     -H "Idempotency-Key: 7b0c..." -d '{"cart_id":"my-cart"}'
+curl -s -X PATCH localhost:8050/orders/<id> -H "Content-Type: application/json" -d '{"status":"confirmed"}'
+```
+
+### OpenAPI
+
+The spec is `openapi.yaml` (generated from the code; Swagger UI at `/docs`).
+Regenerate after changing routes: `python scripts/export_openapi.py`.
+
+### Rate limit
+
+`POST /orders`: **5 requests per 10 s window per client IP** (in-process,
+single instance; `ORDERS_RATE_LIMIT` / `ORDERS_RATE_WINDOW_S`). The 6th call
+in a window gets `429` with `Retry-After` (seconds until the window ends).
+
+```bash
+bash scripts/rate_limit_demo.sh
+```
+
+### Reliable Python caller
+
+```bash
+python clients/http_caller.py --orders 3     # several checkouts in one run
+python clients/reliability_demo.py           # success, timeout+retry, breaker open, recovery
+```
+
+Timeout 2 s, max 3 attempts (backoff 0.5 s, 1 s + jitter), circuit breaker
+opens after 3 failed attempts, retries after 5 s with one trial call.
+
+## gRPC (A2 Part B)
+
+Proto: `app/proto/orders.proto`. Generated code is committed in `app/gen/` and
+regenerated in the Docker build. Generation command (from `app/`):
+
+```bash
+python -m grpc_tools.protoc -I proto --python_out=gen --pyi_out=gen --grpc_python_out=gen proto/orders.proto
+# or: bash scripts/gen_proto.sh
+```
+
+```bash
+# fill a cart over HTTP (same Redis), then place the order over gRPC
+curl -s -X PUT localhost:8050/carts/g1/items/p2 -H "Content-Type: application/json" -d '{"quantity":1}'
+python clients/grpc_client.py --cart-id g1 --key my-key --deadline 2 --request-id trace-demo-1
+python clients/grpc_client.py --cart-id empty-cart       # FAILED_PRECONDITION
+python clients/grpc_client.py --cart-id "bad id!"         # INVALID_ARGUMENT
+```
+
+## Populate the dashboards
+
+```bash
+bash scripts/gen_calls.sh 20     # ~4 min: HTTP + gRPC successes, failures, replays
+bash test_traffic.sh             # A1-style background traffic (Ctrl+C to stop)
+```
+
+## Order workflow
 
 ```
 PENDING → CONFIRMED → SHIPPED → DELIVERED
    └────────┴──────────┴──────→ CANCELLED
 ```
 
-## Stop and Clean Up
+## A1 experiments
 
-```bash
-docker compose down          # stop all containers
-docker compose down -v       # stop and remove all data volumes
-```
+- Fault injection: set `FAULT_INJECTION=true` on `app` in `docker-compose.yml`
+  (every 5th request +500 ms, every 7th returns an error).
+- Cardinality demo: `POST /demo/cardinality?mode=bad&count=100`, or
+  `python app/cardinality_demo.py --with-label`.
