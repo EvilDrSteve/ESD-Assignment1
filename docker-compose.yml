@@ -1,6 +1,18 @@
 services:
 
   # ── Application ────────────────────────────────────────────────────────────
+  # Source of truth shared by the HTTP and gRPC services (A2). No volume: data
+  # is demo data and is reseeded on start.
+  redis:
+    image: redis:7.4-alpine
+    container_name: store-redis
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
   app:
     build: ./app
     container_name: service-request-app
@@ -8,14 +20,45 @@ services:
       - "8050:8050"
     restart: unless-stopped
     environment:
+      - SERVICE_NAME=store-api
+      - REDIS_URL=redis://redis:6379/0
       - FAULT_INJECTION=false
+      - ENABLE_FAULT_ADMIN=true        # POST /admin/faults for the reliability demo
+      - ORDERS_RATE_LIMIT=5            # POST /orders: 5 calls ...
+      - ORDERS_RATE_WINDOW_S=10        # ... per 10 s per client IP
       - LOG_DIR=/var/log/app
+      - LOG_FILE=app.log
     volumes:
       - app_logs:/var/log/app
+    depends_on:
+      redis:
+        condition: service_healthy
     labels:
       - "co.elastic.logs/enabled=true"
 
-  # ── Metrics stack (Part B) ─ uncomment when ready ──────────────────────────
+  # gRPC front end (A2 Part B): same image and business code, separate process
+  grpc-server:
+    build: ./app
+    container_name: store-grpc
+    command: ["python", "grpc_server.py"]
+    ports:
+      - "50051:50051"   # gRPC
+      - "9101:9101"     # Prometheus metrics
+    restart: unless-stopped
+    environment:
+      - SERVICE_NAME=store-grpc
+      - REDIS_URL=redis://redis:6379/0
+      - GRPC_PORT=50051
+      - METRICS_PORT=9101
+      - LOG_DIR=/var/log/app
+      - LOG_FILE=grpc.log
+    volumes:
+      - app_logs:/var/log/app
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  # ── Metrics stack ─────────────────────────────────────────────────────────
   prometheus:
     image: prom/prometheus:v2.54.0
     container_name: prometheus
@@ -30,8 +73,14 @@ services:
     container_name: grafana
     ports:
       - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
     volumes:
       - grafana_data:/var/lib/grafana
+      # Datasource and dashboards are provisioned from files, so they survive volume wipes
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
 
   node-exporter:
     image: prom/node-exporter:v1.8.2
