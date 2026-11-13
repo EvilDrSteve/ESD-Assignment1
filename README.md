@@ -1,4 +1,4 @@
-# Online Store API — ESD Assignments 1 & 2
+# Online Store API — ESD Assignments 1, 2 & 3
 
 An online store with an HTTP API (FastAPI) and a gRPC service, sharing one Redis
 store, with Prometheus metrics, Grafana dashboards and an ELK logging pipeline.
@@ -6,6 +6,65 @@ store, with Prometheus metrics, Grafana dashboards and an ELK logging pipeline.
 - **A1:** API, metrics, dashboards, logging pipeline (see `report.md`)
 - **A2:** improved HTTP API, OpenAPI spec, idempotency, rate limiting, reliable
   Python caller, gRPC `PlaceOrder` service, extended metrics (see `report-a2.md`)
+- **A3 (in progress, pair project):** three replicas behind Envoy, load-balancing
+  experiments. See the next section.
+
+## Assignment 3: what we're doing and how we work
+
+**Goal.** Run three copies of the store (replicas **A**, **B**, **C**) and put
+**Envoy** in front of them. Every HTTP request and gRPC call goes to Envoy, and
+Envoy picks a replica. We then use Prometheus, Grafana and Kibana to show how the
+traffic was spread, and run experiments: uneven weights, a slow replica, and a
+replica that crashes and comes back. The full brief is summarised in
+[issue #1](https://github.com/EvilDrSteve/ESD-Assignment1/issues/1).
+
+```
+                                 ┌──► replica A (HTTP + gRPC) ─┐
+ load client ──► Envoy ──────────┼──► replica B (HTTP + gRPC) ─┼──► Redis (shared data)
+ (HTTP + gRPC)   :10000 / :10001 └──► replica C (HTTP + gRPC) ─┘
+
+ Prometheus scrapes A, B, C and Envoy directly ──► Grafana
+ replica logs + Envoy access logs ──► Filebeat ──► Elasticsearch ──► Kibana
+```
+
+**Status.** The code on this branch is still the finished A2: one HTTP container
+and one gRPC container, no Envoy yet. Everything in the "Run" section below
+describes that A2 setup until the A3 issues land.
+
+**Plan.** The work is split into GitHub issues; anyone can pick any open issue
+whose "Needs first" issues are done.
+
+| Step | Issues | What |
+|---|---|---|
+| 1. Make the app work as 3 replicas | #2, #3, #4, #5 | HTTP + gRPC in one container scaled to 3, read-only `GetProduct` RPC + gRPC health check, rate limit shared in Redis, per-replica slow-down switch |
+| 2. Envoy and observability | #6, #7, #8, #9, #10 | Envoy (A only at first), Prometheus per replica, Envoy logs in Kibana, fixed-rate load client, per-replica Grafana dashboard |
+| 3. Baselines | #11, #12 | Everything to A, then round robin across A, B, C |
+| 4. Experiments | #13, #14, #15 | Weights 2:1:1, slow B (round robin vs least request), stop and restart B with health checks |
+| 5. Write-up | #16 | README and report |
+
+Start with **#2**: most other issues build on it. #3 and #4 have no dependencies
+and can be done in parallel.
+
+**Workflow.**
+1. Pick an open issue and assign yourself, so we don't both start it.
+2. Branch off `assignment-3`, e.g. `git switch assignment-3 && git pull && git switch -c 2-replicas`.
+3. Open a PR **into `assignment-3`** (not `main`) with `Closes #N` in the description.
+   The other person reviews and merges.
+4. Close the issue by hand after merging: `Closes #N` only auto-closes on merges into `main`.
+
+**Things that change in A3 and why** (details in each issue):
+
+| Thing | Where it lives now | Problem with 3 replicas |
+|---|---|---|
+| Products, carts, orders | Redis | None: all replicas share it |
+| Idempotency records | Redis | None: duplicate prevention still works |
+| Rate-limit counters | In each process's memory | Each replica counts separately, so a client gets ~3× the limit (#4) |
+| Client IP for the rate limit | Socket address | Behind Envoy every request comes from Envoy's IP (#4) |
+| Fault switch | One Redis key | Slows every replica; experiments need B alone (#5) |
+
+**Setup for a new teammate.** The A3 PDF lives in `docs/`, which is gitignored;
+issue #1 has the summary. Python environment and test commands are under
+"Host environment" and "Tests" below.
 
 ```
            HTTP :8050                          gRPC :50051
