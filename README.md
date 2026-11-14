@@ -6,15 +6,15 @@ store, with Prometheus metrics, Grafana dashboards and an ELK logging pipeline.
 - **A1:** API, metrics, dashboards, logging pipeline (see `report.md`)
 - **A2:** improved HTTP API, OpenAPI spec, idempotency, rate limiting, reliable
   Python caller, gRPC `PlaceOrder` service, extended metrics (see `report-a2.md`)
-- **A3 (in progress, pair project):** three replicas behind Envoy, load-balancing
+- **A3 (in progress):** three replicas behind Envoy, load-balancing
   experiments. See the next section.
 
-## Assignment 3: what we're doing and how we work
+## Assignment 3: plan
 
 **Goal.** Run three copies of the store (replicas **A**, **B**, **C**) and put
 **Envoy** in front of them. Every HTTP request and gRPC call goes to Envoy, and
-Envoy picks a replica. We then use Prometheus, Grafana and Kibana to show how the
-traffic was spread, and run experiments: uneven weights, a slow replica, and a
+Envoy picks a replica. Prometheus, Grafana and Kibana then show how the
+traffic was spread, followed by experiments: uneven weights, a slow replica, and a
 replica that crashes and comes back. The full brief is summarised in
 [issue #1](https://github.com/EvilDrSteve/ESD-Assignment1/issues/1).
 
@@ -31,8 +31,8 @@ replica that crashes and comes back. The full brief is summarised in
 and one gRPC container, no Envoy yet. Everything in the "Run" section below
 describes that A2 setup until the A3 issues land.
 
-**Plan.** The work is split into GitHub issues; anyone can pick any open issue
-whose "Needs first" issues are done.
+**Plan.** The work is tracked as GitHub issues; each lists the issues it needs
+first.
 
 | Step | Issues | What |
 |---|---|---|
@@ -42,15 +42,10 @@ whose "Needs first" issues are done.
 | 4. Experiments | #13, #14, #15 | Weights 2:1:1, slow B (round robin vs least request), stop and restart B with health checks |
 | 5. Write-up | #16 | README and report |
 
-Start with **#2**: most other issues build on it. #3 and #4 have no dependencies
-and can be done in parallel.
+#2 comes first: most other issues build on it.
 
-**Workflow.**
-1. Pick an open issue and assign yourself, so we don't both start it.
-2. Branch off `assignment-3`, e.g. `git switch assignment-3 && git pull && git switch -c 2-replicas`.
-3. Open a PR **into `assignment-3`** (not `main`) with `Closes #N` in the description.
-   The other person reviews and merges.
-4. Close the issue by hand after merging: `Closes #N` only auto-closes on merges into `main`.
+**Workflow.** One branch per issue off `assignment-3`
+(e.g. `git switch -c 2-replicas`), merged back into `assignment-3` with a PR.
 
 **Things that change in A3 and why** (details in each issue):
 
@@ -62,9 +57,7 @@ and can be done in parallel.
 | Client IP for the rate limit | Socket address | Behind Envoy every request comes from Envoy's IP (#4) |
 | Fault switch | One Redis key | Slows every replica; experiments need B alone (#5) |
 
-**Setup for a new teammate.** The A3 PDF lives in `docs/`, which is gitignored;
-issue #1 has the summary. Python environment and test commands are under
-"Host environment" and "Tests" below.
+The A3 brief is summarised in issue #1.
 
 ```
            HTTP :8050                          gRPC :50051
