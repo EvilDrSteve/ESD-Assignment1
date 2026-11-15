@@ -48,6 +48,17 @@ orders_pending.set_function(_from_redis(lambda: store.count_orders(OrderStatus.P
 active_carts = Gauge("active_carts", "Number of carts with items")
 active_carts.set_function(_from_redis(store.count_active_carts))
 
+
+def _injected_delay() -> float:
+    fault = faults.current_fault()
+    return fault.delay_s if fault and fault.mode == "delay" else 0.0
+
+
+# A3: shows on the dashboard when this replica is being slowed down on purpose
+injected_delay_seconds = Gauge("injected_delay_seconds",
+                               "Delay added to every request on this replica by the delay fault (0 = off)")
+injected_delay_seconds.set_function(_injected_delay)
+
 # A1 experiment: every 5th request slow, every 7th fails
 FAULT_INJECTION = os.environ.get("FAULT_INJECTION", "false").lower() == "true"
 request_counter = 0
@@ -167,22 +178,24 @@ async def observe_requests(request: Request, call_next):
                     await asyncio.sleep(0.5)
                     logger.warning("fault_injected", extra={"fault": "latency", "delay_ms": 500})
                 if request_counter % 7 == 0:
-                    fault = "error"
+                    fault = faults.Fault("error", 0)
 
-        if fault == "error":
+        if fault and fault.mode == "error":
             logger.warning("fault_injected", extra={"fault": "error", "status": 503})
             response = problem(503, "service-unavailable", "Service unavailable",
                                "Injected server failure", request)
         else:
+            if fault and fault.mode == "delay":  # counted as in flight while waiting
+                await asyncio.sleep(fault.delay_s)
             try:
                 response = await call_next(request)
             except Exception:
                 logger.exception("unhandled_error")
                 response = problem(500, "internal-error", "Internal server error",
                                    "Unexpected error; see logs with this request_id", request)
-            if fault == "slow":
-                logger.warning("fault_injected", extra={"fault": "slow", "delay_ms": faults.SLOW_DELAY_S * 1000})
-                await asyncio.sleep(faults.SLOW_DELAY_S)
+            if fault and fault.mode == "slow":
+                logger.warning("fault_injected", extra={"fault": "slow", "delay_ms": fault.delay_s * 1000})
+                await asyncio.sleep(fault.delay_s)
     finally:
         in_flight.dec()
 
@@ -202,6 +215,7 @@ async def observe_requests(request: Request, call_next):
             "endpoint": endpoint,
             "status": response.status_code,
             "duration_ms": round(duration * 1000, 2),
+            "fault": fault.mode if fault else None,
         },
     )
     return response
@@ -375,23 +389,32 @@ def get_stats():
     return svc.get_stats()
 
 
-# ── Fault switch for the reliability demo ────────────────────────────────
+# ── Fault switch (A2 reliability demo, A3 slow replica) ──────────────────
 
 
 class FaultRequest(BaseModel):
-    mode: str = Field(pattern="^(error|slow|off)$", examples=["error"])
-    duration_s: float = Field(default=10, gt=0, le=300)
+    mode: str = Field(pattern="^(error|slow|delay|off)$", examples=["delay"])
+    duration_s: float = Field(default=10, gt=0, le=3600)
+    replica: str = Field(default=faults.ALL, pattern="^([A-Z]|all)$", examples=["B"],
+                         description="Replica letter, or `all` for every replica")
+    delay_ms: int | None = Field(default=None, ge=1, le=10000, examples=[200],
+                                 description="For `delay` (default 200) and `slow` (default 3000)")
 
 
 @app.post("/admin/faults", tags=["testing"], responses=errors_doc(404, 422))
 def set_fault(body: FaultRequest):
-    """Turn on a temporary fault (needs ENABLE_FAULT_ADMIN=true). `error` returns 503;
-    `slow` runs the request then delays the response past the client's timeout."""
+    """Turn on a temporary fault (needs ENABLE_FAULT_ADMIN=true) on one replica or all.
+    `error` returns 503; `slow` runs the request then delays the response past the client's
+    timeout; `delay` waits `delay_ms` before handling each request (HTTP and gRPC)."""
     if not faults.ADMIN_ENABLED:
         raise StarletteHTTPException(404, "Not Found")
-    faults.set_fault(body.mode, body.duration_s)
-    logger.warning("fault_switched", extra={"fault": body.mode, "duration_s": body.duration_s})
-    return {"mode": body.mode, "expires_in_ms": faults.remaining_ms()}
+    fault = faults.set_fault(body.mode, body.duration_s, body.replica, body.delay_ms)
+    delay_ms = round(fault.delay_s * 1000) if fault else None
+    logger.warning("fault_switched", extra={
+        "fault": body.mode, "target_replica": body.replica, "delay_ms": delay_ms, "duration_s": body.duration_s,
+    })
+    return {"mode": body.mode, "replica": body.replica, "delay_ms": delay_ms,
+            "expires_in_ms": faults.remaining_ms(body.replica)}
 
 
 # ── Cardinality Demo (A1 Part E.2) ────────────────────────────────────────

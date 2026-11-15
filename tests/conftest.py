@@ -32,3 +32,22 @@ def client():
     import main
     with TestClient(main.app) as c:
         yield c
+
+
+@pytest.fixture
+def channel():
+    """A real gRPC server on a free port, sharing the fake Redis with the HTTP app."""
+    import grpc
+    from grpc_server import build_server
+    server = build_server(port=0)
+    port = server.add_insecure_port("127.0.0.1:0")
+    server.start()
+    with grpc.insecure_channel(f"127.0.0.1:{port}") as ch:
+        yield ch
+    server.stop(None)
+
+
+@pytest.fixture
+def stub(channel):
+    import orders_pb2_grpc
+    return orders_pb2_grpc.OrderServiceStub(channel)
