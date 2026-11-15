@@ -25,23 +25,27 @@ _sym_db = _symbol_database.Default()
 from google.protobuf import timestamp_pb2 as google_dot_protobuf_dot_timestamp__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0corders.proto\x12\x08store.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"=\n\x11PlaceOrderRequest\x12\x0f\n\x07\x63\x61rt_id\x18\x01 \x01(\t\x12\x17\n\x0fidempotency_key\x18\x02 \x01(\t\"F\n\x12PlaceOrderResponse\x12\x1e\n\x05order\x18\x01 \x01(\x0b\x32\x0f.store.v1.Order\x12\x10\n\x08replayed\x18\x02 \x01(\x08\"`\n\tOrderItem\x12\x12\n\nproduct_id\x18\x01 \x01(\t\x12\x0c\n\x04name\x18\x02 \x01(\t\x12\r\n\x05price\x18\x03 \x01(\x01\x12\x10\n\x08quantity\x18\x04 \x01(\x05\x12\x10\n\x08subtotal\x18\x05 \x01(\x01\"\xde\x01\n\x05Order\x12\n\n\x02id\x18\x01 \x01(\t\x12\x0f\n\x07\x63\x61rt_id\x18\x02 \x01(\t\x12\"\n\x05items\x18\x03 \x03(\x0b\x32\x13.store.v1.OrderItem\x12\r\n\x05total\x18\x04 \x01(\x01\x12%\n\x06status\x18\x05 \x01(\x0e\x32\x15.store.v1.OrderStatus\x12.\n\ncreated_at\x18\x06 \x01(\x0b\x32\x1a.google.protobuf.Timestamp\x12.\n\nupdated_at\x18\x07 \x01(\x0b\x32\x1a.google.protobuf.Timestamp*r\n\x0bOrderStatus\x12\x1c\n\x18ORDER_STATUS_UNSPECIFIED\x10\x00\x12\x0b\n\x07PENDING\x10\x01\x12\r\n\tCONFIRMED\x10\x02\x12\x0b\n\x07SHIPPED\x10\x03\x12\r\n\tDELIVERED\x10\x04\x12\r\n\tCANCELLED\x10\x05\x32W\n\x0cOrderService\x12G\n\nPlaceOrder\x12\x1b.store.v1.PlaceOrderRequest\x1a\x1c.store.v1.PlaceOrderResponseb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0corders.proto\x12\x08store.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\'\n\x11GetProductRequest\x12\x12\n\nproduct_id\x18\x01 \x01(\t\"h\n\x07Product\x12\n\n\x02id\x18\x01 \x01(\t\x12\x0c\n\x04name\x18\x02 \x01(\t\x12\x13\n\x0b\x64\x65scription\x18\x03 \x01(\t\x12\x10\n\x08\x63\x61tegory\x18\x04 \x01(\t\x12\r\n\x05price\x18\x05 \x01(\x01\x12\r\n\x05stock\x18\x06 \x01(\x05\"=\n\x11PlaceOrderRequest\x12\x0f\n\x07\x63\x61rt_id\x18\x01 \x01(\t\x12\x17\n\x0fidempotency_key\x18\x02 \x01(\t\"F\n\x12PlaceOrderResponse\x12\x1e\n\x05order\x18\x01 \x01(\x0b\x32\x0f.store.v1.Order\x12\x10\n\x08replayed\x18\x02 \x01(\x08\"`\n\tOrderItem\x12\x12\n\nproduct_id\x18\x01 \x01(\t\x12\x0c\n\x04name\x18\x02 \x01(\t\x12\r\n\x05price\x18\x03 \x01(\x01\x12\x10\n\x08quantity\x18\x04 \x01(\x05\x12\x10\n\x08subtotal\x18\x05 \x01(\x01\"\xde\x01\n\x05Order\x12\n\n\x02id\x18\x01 \x01(\t\x12\x0f\n\x07\x63\x61rt_id\x18\x02 \x01(\t\x12\"\n\x05items\x18\x03 \x03(\x0b\x32\x13.store.v1.OrderItem\x12\r\n\x05total\x18\x04 \x01(\x01\x12%\n\x06status\x18\x05 \x01(\x0e\x32\x15.store.v1.OrderStatus\x12.\n\ncreated_at\x18\x06 \x01(\x0b\x32\x1a.google.protobuf.Timestamp\x12.\n\nupdated_at\x18\x07 \x01(\x0b\x32\x1a.google.protobuf.Timestamp*r\n\x0bOrderStatus\x12\x1c\n\x18ORDER_STATUS_UNSPECIFIED\x10\x00\x12\x0b\n\x07PENDING\x10\x01\x12\r\n\tCONFIRMED\x10\x02\x12\x0b\n\x07SHIPPED\x10\x03\x12\r\n\tDELIVERED\x10\x04\x12\r\n\tCANCELLED\x10\x05\x32\x95\x01\n\x0cOrderService\x12G\n\nPlaceOrder\x12\x1b.store.v1.PlaceOrderRequest\x1a\x1c.store.v1.PlaceOrderResponse\x12<\n\nGetProduct\x12\x1b.store.v1.GetProductRequest\x1a\x11.store.v1.Productb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'orders_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
-  _globals['_ORDERSTATUS']._serialized_start=517
-  _globals['_ORDERSTATUS']._serialized_end=631
-  _globals['_PLACEORDERREQUEST']._serialized_start=59
-  _globals['_PLACEORDERREQUEST']._serialized_end=120
-  _globals['_PLACEORDERRESPONSE']._serialized_start=122
-  _globals['_PLACEORDERRESPONSE']._serialized_end=192
-  _globals['_ORDERITEM']._serialized_start=194
-  _globals['_ORDERITEM']._serialized_end=290
-  _globals['_ORDER']._serialized_start=293
-  _globals['_ORDER']._serialized_end=515
-  _globals['_ORDERSERVICE']._serialized_start=633
-  _globals['_ORDERSERVICE']._serialized_end=720
+  _globals['_ORDERSTATUS']._serialized_start=664
+  _globals['_ORDERSTATUS']._serialized_end=778
+  _globals['_GETPRODUCTREQUEST']._serialized_start=59
+  _globals['_GETPRODUCTREQUEST']._serialized_end=98
+  _globals['_PRODUCT']._serialized_start=100
+  _globals['_PRODUCT']._serialized_end=204
+  _globals['_PLACEORDERREQUEST']._serialized_start=206
+  _globals['_PLACEORDERREQUEST']._serialized_end=267
+  _globals['_PLACEORDERRESPONSE']._serialized_start=269
+  _globals['_PLACEORDERRESPONSE']._serialized_end=339
+  _globals['_ORDERITEM']._serialized_start=341
+  _globals['_ORDERITEM']._serialized_end=437
+  _globals['_ORDER']._serialized_start=440
+  _globals['_ORDER']._serialized_end=662
+  _globals['_ORDERSERVICE']._serialized_start=781
+  _globals['_ORDERSERVICE']._serialized_end=930
 # @@protoc_insertion_point(module_scope)
