@@ -7,22 +7,6 @@ import orders_pb2
 import orders_pb2_grpc
 
 
-@pytest.fixture
-def channel():
-    from grpc_server import build_server
-    server = build_server(port=0)
-    port = server.add_insecure_port("127.0.0.1:0")
-    server.start()
-    with grpc.insecure_channel(f"127.0.0.1:{port}") as ch:
-        yield ch
-    server.stop(None)
-
-
-@pytest.fixture
-def stub(channel):
-    return orders_pb2_grpc.OrderServiceStub(channel)
-
-
 def place(stub, cart_id, key="", request_id="test-rid"):
     return stub.PlaceOrder.with_call(
         orders_pb2.PlaceOrderRequest(cart_id=cart_id, idempotency_key=key),

@@ -403,10 +403,13 @@ paths:
       tags:
       - testing
       summary: Set Fault
-      description: 'Turn on a temporary fault (needs ENABLE_FAULT_ADMIN=true). `error`
-        returns 503;
+      description: 'Turn on a temporary fault (needs ENABLE_FAULT_ADMIN=true) on one
+        replica or all.
 
-        `slow` runs the request then delays the response past the client''s timeout.'
+        `error` returns 503; `slow` runs the request then delays the response past
+        the client''s
+
+        timeout; `delay` waits `delay_ms` before handling each request (HTTP and gRPC).'
       operationId: set_fault_admin_faults_post
       requestBody:
         content:
@@ -531,16 +534,34 @@ components:
       properties:
         mode:
           type: string
-          pattern: ^(error|slow|off)$
+          pattern: ^(error|slow|delay|off)$
           title: Mode
           examples:
-          - error
+          - delay
         duration_s:
           type: number
-          maximum: 300.0
+          maximum: 3600.0
           exclusiveMinimum: 0.0
           title: Duration S
           default: 10
+        replica:
+          type: string
+          pattern: ^([A-Z]|all)$
+          title: Replica
+          description: Replica letter, or `all` for every replica
+          default: all
+          examples:
+          - B
+        delay_ms:
+          anyOf:
+          - type: integer
+            maximum: 10000.0
+            minimum: 1.0
+          - type: 'null'
+          title: Delay Ms
+          description: For `delay` (default 200) and `slow` (default 3000)
+          examples:
+          - 200
       type: object
       required:
       - mode
