@@ -125,9 +125,32 @@ index template, then exits), Kibana and Filebeat. Give it about 30 s.
 | Grafana | http://localhost:3000 (admin / admin) |
 | Kibana | http://localhost:5601 |
 
-Grafana's Prometheus datasource and both dashboards (**Store → Online Store
-Dashboard** for A1, **Store → Store A2 — HTTP vs gRPC: Place order**) are
-provisioned from `grafana/`, so nothing has to be set up by hand.
+Grafana's Prometheus datasource and the dashboards (**Store → Online Store
+Dashboard** for A1, **Store → Store A2 — HTTP vs gRPC: Place order**,
+**Store → Store A3 — Load balancing per replica**) are provisioned from
+`grafana/`, so nothing has to be set up by hand.
+
+### A3 dashboard (`grafana/dashboards/store-a3.json`)
+
+Built by `scripts/build_a3_dashboard.py` (edit there, then re-run). The
+`rate window` dropdown sets `$window` (30s / **1m** / 2m); every panel title
+shows the window it uses. Replicas have fixed colours: A blue, B orange, C
+green. Application traffic only: `/metrics`, `/health` and gRPC health checks
+are excluded.
+
+| Panel | Query (HTTP; gRPC uses `grpc_server_*` the same way) |
+|---|---|
+| Share per replica over the time range | `100 * sum by (replica) (increase(http_requests_total{…}[$__range])) / scalar(sum(increase(…[$__range])))` |
+| Request rate per replica | `sum by (replica) (rate(http_requests_total{job="store",endpoint!~"/metrics\|/health"}[$window]))` |
+| Share of total (%) | `100 * sum by (replica) (rate(…[$window])) / scalar(sum(rate(…[$window])))` |
+| Active requests | `sum by (replica) (http_requests_in_flight{…})` (gauge, sampled every 2 s) |
+| p50 / p95 | `histogram_quantile(0.95, sum by (le, replica) (rate(http_request_duration_seconds_bucket{…}[$window])))` |
+| Errors by status | `sum by (replica, status) (rate(http_requests_total{…,status=~"4..\|5.."}[$window]))`; gRPC: `grpc_code!="OK"` |
+| Envoy per cluster | `rate(envoy_cluster_upstream_rq_total[$window])`, `envoy_cluster_upstream_rq_active`, `envoy_cluster_membership_healthy` / `_total` |
+| Replicas up, injected delay | `up{job="store"}`, `injected_delay_seconds` |
+
+Set the time range to one experiment run (the load client prints its start
+and end times) and the share panels give that run's A/B/C split.
 
 Kibana: create a data view `store-logs-*` with `@timestamp`, then search, e.g.
 `request_id : "trace-demo-1"`, `transport : "grpc" and grpc_code : *` or
