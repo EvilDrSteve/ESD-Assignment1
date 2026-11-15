@@ -193,7 +193,94 @@ HTTP/2 streams.
 
 ## Part D: Experiments
 
-*#13 (weighted), #14 (least request), #15 (failure and recovery)*
+Every experiment starts from the Part C config, uses the same workload, and
+puts the base config back afterwards. HTTP and gRPC are reported separately,
+with no client retries and no circuit breaker. Each experiment's Envoy config
+is generated from `envoy/envoy.yaml` by `scripts/build_envoy_variants.py`, so
+it differs from the base only in the lines it is about. Compose mounts it
+through `ENVOY_CONFIG`.
+
+### D1. Weighted round robin, A:B:C = 2:1:1
+
+**Change.** `load_balancing_weight: 2` for A in both clusters; B and C stay at
+1 (`envoy/weighted-2-1-1.yaml`).
+
+```bash
+ENVOY_CONFIG=weighted-2-1-1.yaml docker compose up -d --force-recreate envoy
+python clients/loadgen.py --interface both --rate 50 --duration 60 --label wrr-2-1-1
+docker compose up -d --force-recreate envoy      # restore 1:1:1
+```
+
+The run was 16:17:45 to 16:18:45 UTC, with the result in
+`evidence/a3/runs/wrr-2-1-1.json`.
+
+**Prediction** (written before the run):
+- **Shares:** 50 / 25 / 25 % on both interfaces, with gRPC exact and HTTP
+  within a call or two.
+- **Rates:** A at about 25/s per interface, B and C at about 12.5/s.
+- **Latency:** per-replica latency the same as in Part C. A weight decides
+  how many calls a replica gets, not how fast it serves them, so it adds no
+  capacity.
+- **Active requests:** about 2× as many on A as on B or C, but still close to
+  zero at this load.
+- **Errors:** none.
+
+**Results**
+
+| Interface | A / B / C calls (client) | A / B / C (Envoy log) | Share | Failures | Client p95 (RR → 2:1:1) |
+|---|---|---|---|---|---|
+| HTTP | 1499 / 751 / 750 | 1499 / 751 / 750 | 50.0 / 25.0 / 25.0 % | 0 | 8.51 → 8.01 ms |
+| gRPC | 1500 / 750 / 750 | 1500 / 750 / 750 | 50.0 / 25.0 / 25.0 % | 0 | 5.88 → 5.24 ms |
+
+**Observations** (screenshots `13-grafana-share-http.jpg`,
+`13-grafana-grpc.jpg`, `13-grafana-envoy.jpg`,
+`13-kibana-envoy-by-replica.jpg`):
+- **Shares:** the share bars read 50.0 / 25.0 / 25.0 % on both interfaces.
+- **Rates:** A's line plateaus at 25 req/s, and B's and C's overlap at
+  12.5 req/s.
+- **Envoy's order:** Envoy picks in the repeating pattern A A B C (from the
+  access log, by request number):
+
+  ```
+  gRPC: AABCAABCAABCAABCAABC…
+  HTTP: ABBCAABCAABCAABCAABC…
+  ```
+
+- **Server-side latency:** the same on every replica and the same as in
+  Part C:
+  - HTTP p50 1.27–1.29 ms, p95 about 2.4 ms
+  - gRPC p50 1.25 ms, p95 about 2.4 ms
+- **Active requests:** 0 on every 2 s sample, for all three replicas.
+- **Health:** no errors; Envoy shows 3 of 3 hosts healthy.
+
+**Explanation**
+- **Shares:** they match the prediction exactly. With weights, each Envoy
+  worker sends each replica calls in proportion to its weight, which gives
+  the A A B C cycle. gRPC is exact for the same reason as in Part C: one
+  client connection, so one worker and one sequence.
+- **HTTP:** it starts slightly off (`ABBC…`) because two client connections
+  were briefly on different workers. The total is still within one call of
+  50/25/25.
+- **Latency:** it did not change.
+  - The weight decides how many calls A gets, not how fast A serves them.
+  - Each call still costs A about 1.3 ms, and at 25 calls/s A is busy only
+    about 3% of the time, so nothing queues.
+  - The client p95 differences between the runs (≤0.6 ms) are within the
+    noise of this laptop.
+- **Active requests:** by Little's law, in-flight = rate × time per call.
+  - A: 25/s × ~1.3 ms ≈ 0.03 in flight.
+  - B and C: ≈ 0.016 each.
+  - So A really does hold twice as many calls in flight, but a gauge sampled
+    every 2 s almost never catches a call.
+- **What a higher weight is not:** it is only a promise that the replica can
+  take more. If A were really the same size as B and C and the load were near
+  capacity, 2:1:1 would push A into queueing first. Its latency and active
+  requests would rise, while B and C sat partly idle. Weights belong on
+  replicas that really are bigger (more CPU, faster hardware). Least request
+  (D2) instead adapts to how busy each replica actually is.
+
+**Restore.** I recreated Envoy without `ENVOY_CONFIG`; the admin `/clusters`
+endpoint shows `weight::1` for every host again.
 
 ## Results table
 
@@ -203,6 +290,8 @@ HTTP/2 streams.
 | Baseline / gRPC | A only, no fault | 50 / 50.02 | 100 / 0 / 0 % | 7.08 ms | 0% | One host in the cluster |
 | RR / HTTP | Round robin 1:1:1, no fault | 50 / 50.02 | 33.3 / 33.3 / 33.4 % | 8.51 ms | 0% | Per-worker rotation over ~10 client connections, near-even |
 | RR / gRPC | Round robin 1:1:1, no fault | 50 / 50.02 | 33.3 / 33.3 / 33.3 % | 5.88 ms | 0% | One HTTP/2 connection, one worker, strict A→B→C per call |
+| WRR / HTTP | Weighted RR 2:1:1, no fault | 50 / 50.02 | 50.0 / 25.0 / 25.0 % | 8.01 ms | 0% | Weights set the share; latency unchanged (no extra capacity, load far below it) |
+| WRR / gRPC | Weighted RR 2:1:1, no fault | 50 / 50.02 | 50.0 / 25.0 / 25.0 % | 5.24 ms | 0% | Exact A A B C cycle on the single connection |
 
 ## Conclusions
 
