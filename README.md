@@ -6,8 +6,9 @@ store, with Prometheus metrics, Grafana dashboards and an ELK logging pipeline.
 - **A1:** API, metrics, dashboards, logging pipeline (see `report.md`)
 - **A2:** improved HTTP API, OpenAPI spec, idempotency, rate limiting, reliable
   Python caller, gRPC `PlaceOrder` service, extended metrics (see `report-a2.md`)
-- **A3 (in progress):** three replicas behind Envoy, load-balancing
-  experiments. See the next section.
+- **A3:** three replicas behind Envoy, load-balancing experiments (see
+  `report-a3.md`, with full run notes in `report-a3-details.md`). See the
+  next section.
 
 ## Assignment 3: plan
 
@@ -27,10 +28,15 @@ replica that crashes and comes back. The full brief is summarised in
  replica logs + Envoy access logs ──► Filebeat ──► Elasticsearch ──► Kibana
 ```
 
-**Status.** Done: #2–#6. Three replicas (A, B, C) each serve HTTP and gRPC
-in one process. Envoy listens on the A2 ports (8050 HTTP, 50051 gRPC) and
-sends everything to **A** (Part A). All A2 commands below now go through
-Envoy unchanged.
+**Status.** All done (#2–#16).
+- **Replicas:** A, B and C each serve HTTP and gRPC in one process.
+- **Envoy:** listens on the A2 ports (8050 HTTP, 50051 gRPC) and spreads
+  calls round robin across A, B and C. All A2 commands below go through Envoy
+  unchanged.
+- **Experiments:** each one switches Envoy to a generated config and back (see
+  *Envoy* below).
+- **Results:** in `report-a3.md`, with raw client results in
+  `evidence/a3/runs/` and screenshots in `screenshots/a3/`.
 
 **Plan.** The work is tracked as GitHub issues; each lists the issues it needs
 first.
@@ -117,6 +123,29 @@ docker compose up -d --force-recreate envoy                                   # 
 | `least-request.yaml` | D2: `LEAST_REQUEST` (power of two choices), equal weights |
 | `health-checks.yaml` | D3: round robin + active health checks (interval 2 s, timeout 1 s, unhealthy 2, healthy 2) |
 
+**Reset everything to the default state** (after any experiment, or if
+unsure). This restarts a stopped replica, puts back the round-robin config
+and turns off every fault:
+
+```bash
+docker compose up -d                                  # starts anything stopped (e.g. replica B)
+docker compose up -d --force-recreate envoy           # base config (no ENVOY_CONFIG)
+bash scripts/fault.sh all off; bash scripts/fault.sh B off
+bash scripts/fault.sh all status                      # injected_delay_seconds 0 on A, B, C
+curl -s localhost:9901/clusters | grep -c "health_flags::healthy"   # 6 (3 hosts x 2 clusters)
+```
+
+Each experiment below lists its own commands; full notes are in
+`report-a3-details.md`.
+
+D1 (weights 2:1:1):
+
+```bash
+ENVOY_CONFIG=weighted-2-1-1.yaml docker compose up -d --force-recreate envoy
+python clients/loadgen.py --interface both --rate 50 --duration 60 --label wrr-2-1-1
+docker compose up -d --force-recreate envoy
+```
+
 D2 (slow B, round robin vs least request):
 
 ```bash
@@ -154,6 +183,7 @@ Runs so far (`evidence/a3/runs/`, details in `report-a3.md`):
 | `delayb-lr` | Least request, B +200 ms | 1285 / 445 / 1270 | 1258 / 426 / 1316 |
 | `hc-stop-b` | Round robin + health checks, B stopped 22 s | 1195 / 543 / 1188 (+74 failed) | 1193 / 547 / 1192 (+68 failed) |
 | `hc-slow-b` | Health checks, B +2 s (10/s for 20 s) | 68 / 0 / 64 (+68 timed out on B) | 66 / 67 / 67 (66 on B timed out) |
+| `envoy-stop` | Envoy stopped 8.2 s (10/s for 20 s) | 33 / 34 / 34 (+99 failed) | 26 / 25 / 26 (+123 failed) |
 
 The load client also prints and saves client p50/p95 **per replica**
 (`latency_ms_by_replica`), so a slow replica stands out directly.
