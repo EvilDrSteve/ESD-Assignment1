@@ -1,0 +1,73 @@
+{
+  "label": "wrr-2-1-1",
+  "runs": [
+    {
+      "interface": "http",
+      "target": "localhost:8050",
+      "operation": "GET /products/{id}",
+      "target_rate": 50.0,
+      "duration_s": 60.0,
+      "started_at": "2026-11-15T16:17:45+00:00",
+      "ended_at": "2026-11-15T16:18:45+00:00",
+      "sent": 3000,
+      "actual_rate": 50.02,
+      "max_send_lag_ms": 6.46,
+      "successes": 3000,
+      "failures": 0,
+      "error_rate_pct": 0.0,
+      "by_status": {
+        "200": 3000
+      },
+      "by_replica": {
+        "A": 1499,
+        "B": 751,
+        "C": 750
+      },
+      "share_pct": {
+        "A": 50.0,
+        "B": 25.0,
+        "C": 25.0
+      },
+      "latency_ms": {
+        "p50": 5.59,
+        "p95": 8.01,
+        "p99": 9.7,
+        "max": 40.94
+      }
+    },
+    {
+      "interface": "grpc",
+      "target": "localhost:50051",
+      "operation": "OrderService/GetProduct",
+      "target_rate": 50.0,
+      "duration_s": 60.0,
+      "started_at": "2026-11-15T16:17:45+00:00",
+      "ended_at": "2026-11-15T16:18:45+00:00",
+      "sent": 3000,
+      "actual_rate": 50.02,
+      "max_send_lag_ms": 19.81,
+      "successes": 3000,
+      "failures": 0,
+      "error_rate_pct": 0.0,
+      "by_status": {
+        "OK": 3000
+      },
+      "by_replica": {
+        "A": 1500,
+        "B": 750,
+        "C": 750
+      },
+      "share_pct": {
+        "A": 50.0,
+        "B": 25.0,
+        "C": 25.0
+      },
+      "latency_ms": {
+        "p50": 3.4,
+        "p95": 5.24,
+        "p99": 6.8,
+        "max": 35.55
+      }
+    }
+  ]
+}

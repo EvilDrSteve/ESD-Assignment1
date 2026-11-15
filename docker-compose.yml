@@ -57,7 +57,9 @@ services:
     environment:
       - ENVOY_UID=0     # run as root so it can write to the shared log volume
     volumes:
-      - ./envoy/envoy.yaml:/etc/envoy/envoy.yaml:ro
+      # ENVOY_CONFIG picks an experiment variant (scripts/build_envoy_variants.py);
+      # unset = the base config, round robin A:B:C = 1:1:1
+      - ./envoy/${ENVOY_CONFIG:-envoy.yaml}:/etc/envoy/envoy.yaml:ro
       - envoy_logs:/var/log/envoy
     depends_on:
       - app

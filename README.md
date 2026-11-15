@@ -101,12 +101,27 @@ clusters list A, B and C with `load_balancing_weight: 1` and
 `envoy/envoy.yaml`, apply it with `docker compose up -d --force-recreate envoy`.
 Check it with `curl -s localhost:9901/clusters | grep -E "hostname|health_flags"`.
 
+**Experiment configs.** `scripts/build_envoy_variants.py` writes one Envoy
+config per experiment into `envoy/`. Each is the base config with only the
+experiment's lines changed. Re-run the script after editing `envoy.yaml`.
+Compose mounts `envoy/$ENVOY_CONFIG`, defaulting to `envoy.yaml`:
+
+```bash
+ENVOY_CONFIG=weighted-2-1-1.yaml docker compose up -d --force-recreate envoy   # switch
+docker compose up -d --force-recreate envoy                                   # restore 1:1:1
+```
+
+| Variant file | Experiment |
+|---|---|
+| `weighted-2-1-1.yaml` | D1: weighted round robin, A:B:C = 2:1:1 |
+
 Runs so far (`evidence/a3/runs/`, details in `report-a3.md`):
 
 | Run | Envoy config | HTTP A / B / C | gRPC A / B / C |
 |---|---|---|---|
 | `baseline-a-only` | A only | 3000 / 0 / 0 | 3000 / 0 / 0 |
 | `rr-equal` | Round robin 1:1:1 | 1000 / 999 / 1001 | 1000 / 1000 / 1000 |
+| `wrr-2-1-1` | Weighted round robin 2:1:1 | 1499 / 751 / 750 | 1500 / 750 / 750 |
 
 ## Prerequisites
 
