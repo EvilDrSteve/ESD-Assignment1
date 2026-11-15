@@ -2,15 +2,25 @@ global:
   scrape_interval: 2s
 
 scrape_configs:
-  # All replicas of the store (A3). Docker DNS returns one A record per
-  # replica for "app", so each replica is scraped on its own. /metrics on
-  # :8050 holds both the HTTP and the gRPC metrics of that replica.
+  # Each replica directly by container name, never through Envoy: through
+  # Envoy, every scrape would hit whichever replica the balancer picked.
+  # One target per replica: :8050/metrics holds both the HTTP and the gRPC
+  # metrics of that replica (one process). The replica label has only three
+  # values (A, B, C), so it adds no cardinality problem.
   - job_name: "store"
-    dns_sd_configs:
-      - names: ["app"]
-        type: A
-        port: 8050
-        refresh_interval: 5s
+    static_configs:
+      - targets: ["assignment-1-app-1:8050"]
+        labels: { replica: "A" }
+      - targets: ["assignment-1-app-2:8050"]
+        labels: { replica: "B" }
+      - targets: ["assignment-1-app-3:8050"]
+        labels: { replica: "C" }
+
+  # Envoy's own view: requests, active requests, latency and healthy hosts per cluster
+  - job_name: "envoy"
+    metrics_path: /stats/prometheus
+    static_configs:
+      - targets: ["envoy:9901"]
 
   - job_name: "node-exporter"
     static_configs:
