@@ -269,6 +269,35 @@ python clients/grpc_client.py --cart-id empty-cart       # FAILED_PRECONDITION
 python clients/grpc_client.py --cart-id "bad id!"         # INVALID_ARGUMENT
 ```
 
+## Fixed-rate load client (A3)
+
+`clients/loadgen.py` sends read-only calls through Envoy at a **fixed rate
+for a fixed duration** and never waits for one response before sending the
+next (open loop: call *i* is due at `start + i/rate`). HTTP uses
+`GET /products/{id}`, gRPC uses `GetProduct` on one channel. There are no
+retries and no circuit breaker. Each call has its own request id
+(`lg-<label>-<h|g>-<n>`). Latency is measured from when the call was due.
+
+```bash
+python clients/loadgen.py --interface http --rate 50 --duration 60 --label baseline-http
+python clients/loadgen.py --interface grpc --rate 50 --duration 60 --label baseline-grpc
+python clients/loadgen.py --interface both --rate 50 --duration 60 --label baseline   # both at once
+```
+
+It prints and saves (`evidence/a3/runs/<label>.json`), per interface: target
+and actual rate, sent, successes, failures by status, error rate, calls per
+replica and share % (from the `X-Replica` header / `x-replica` metadata),
+client p50/p95/p99, and start/end times to line up with Grafana. Example
+(Part A, everything to A):
+
+```
+HTTP GET /products/{id} via localhost:8050
+  rate      target 50.0/s, actual 50.02/s for 60.0 s (max send lag 10.46 ms)
+  sent      3000  successes 3000  failures 0 (0.0%)  by status {'200': 3000}
+  replicas  {'A': 3000}  share % {'A': 100.0}
+  latency   p50 6.27 ms  p95 9.56 ms  p99 103.43 ms  max 604.11 ms
+```
+
 ## Populate the dashboards
 
 ```bash
