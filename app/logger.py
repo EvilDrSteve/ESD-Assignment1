@@ -4,6 +4,8 @@ import sys
 import os
 from pythonjsonlogger import jsonlogger
 
+from replica import REPLICA
+
 # Set per request by the HTTP middleware / gRPC interceptor, so every log line
 # written while handling that request (including in shared business code)
 # carries the same request_id.
@@ -16,12 +18,13 @@ class RequestContextFilter(logging.Filter):
         if not getattr(record, "request_id", None):
             record.request_id = request_id_var.get()
         record.transport = transport_var.get()
+        record.replica = REPLICA  # A, B or C (A3): which copy wrote the line
         return True
 
 
 def setup_logger():
-    # Logger name becomes the "service" field: store-api (HTTP) or store-grpc
-    logger = logging.getLogger(os.environ.get("SERVICE_NAME", "store-api"))
+    # Logger name becomes the "service" field; "transport" tells HTTP from gRPC
+    logger = logging.getLogger(os.environ.get("SERVICE_NAME", "store"))
     logger.setLevel(logging.INFO)
 
     formatter = jsonlogger.JsonFormatter(
@@ -38,7 +41,9 @@ def setup_logger():
     log_dir = os.environ.get("LOG_DIR", "")
     if log_dir:
         os.makedirs(log_dir, exist_ok=True)
-        log_file = os.environ.get("LOG_FILE", "app.log")
+        # One file per replica (app-A.log, ...) so three containers never append
+        # to the same file on the shared volume
+        log_file = os.environ.get("LOG_FILE", "app-{replica}.log").format(replica=REPLICA)
         file_handler = logging.FileHandler(os.path.join(log_dir, log_file))
         file_handler.setFormatter(formatter)
         logger.addHandler(file_handler)

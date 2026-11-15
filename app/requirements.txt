@@ -8,3 +8,4 @@ grpcio==1.66.1
 grpcio-tools==1.66.1
 grpcio-reflection==1.66.1
 protobuf==5.27.2
+dnspython==2.6.1

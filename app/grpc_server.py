@@ -1,4 +1,8 @@
-"""gRPC front end for the order service (runs as its own container).
+"""gRPC front end for the order service.
+
+In the container it runs inside the same process as the HTTP app (serve.py
+calls build_server()). `python grpc_server.py` still runs it on its own, with
+metrics on METRICS_PORT.
 
 PlaceOrder calls the same orders_service.place_order() as HTTP POST /orders,
 against the same Redis, so both transports share rules and data.
