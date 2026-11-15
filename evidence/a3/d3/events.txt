@@ -1,0 +1,12 @@
+16:35:30.026 envoy with health checks; B ip 172.18.0.7
+store_grpc::172.18.0.11:50051::health_flags::healthy
+store_grpc::172.18.0.7:50051::health_flags::healthy
+store_grpc::172.18.0.9:50051::health_flags::healthy
+store_http::172.18.0.11:8050::health_flags::healthy
+store_http::172.18.0.7:8050::health_flags::healthy
+store_http::172.18.0.9:8050::health_flags::healthy
+16:35:45.181 docker stop B (begin)
+16:35:47.721 docker stop B (returned)
+16:36:07.743 docker start B (begin)
+16:36:08.409 docker start B (returned); B ip 172.18.0.7
+16:36:34.028 run finished

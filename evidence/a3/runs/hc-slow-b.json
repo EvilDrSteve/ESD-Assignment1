@@ -1,0 +1,103 @@
+{
+  "label": "hc-slow-b",
+  "runs": [
+    {
+      "interface": "http",
+      "target": "localhost:8050",
+      "operation": "GET /products/{id}",
+      "target_rate": 10.0,
+      "duration_s": 20.0,
+      "started_at": "2026-11-15T16:37:36+00:00",
+      "ended_at": "2026-11-15T16:37:58+00:00",
+      "sent": 200,
+      "actual_rate": 10.05,
+      "max_send_lag_ms": 1.52,
+      "successes": 132,
+      "failures": 68,
+      "error_rate_pct": 34.0,
+      "by_status": {
+        "200": 132,
+        "timeout": 68
+      },
+      "by_replica": {
+        "?": 68,
+        "A": 68,
+        "C": 64
+      },
+      "share_pct": {
+        "?": 34.0,
+        "A": 34.0,
+        "C": 32.0
+      },
+      "latency_ms": {
+        "p50": 8.83,
+        "p95": 2003.31,
+        "p99": 2003.8,
+        "max": 2004.05
+      },
+      "latency_ms_by_replica": {
+        "?": {
+          "p50": 2002.79,
+          "p95": 2003.72
+        },
+        "A": {
+          "p50": 6.69,
+          "p95": 9.35
+        },
+        "C": {
+          "p50": 8.01,
+          "p95": 11.85
+        }
+      }
+    },
+    {
+      "interface": "grpc",
+      "target": "localhost:50051",
+      "operation": "OrderService/GetProduct",
+      "target_rate": 10.0,
+      "duration_s": 20.0,
+      "started_at": "2026-11-15T16:37:36+00:00",
+      "ended_at": "2026-11-15T16:37:58+00:00",
+      "sent": 200,
+      "actual_rate": 10.05,
+      "max_send_lag_ms": 18.7,
+      "successes": 134,
+      "failures": 66,
+      "error_rate_pct": 33.0,
+      "by_status": {
+        "OK": 134,
+        "DEADLINE_EXCEEDED": 66
+      },
+      "by_replica": {
+        "A": 66,
+        "B": 67,
+        "C": 67
+      },
+      "share_pct": {
+        "A": 33.0,
+        "B": 33.5,
+        "C": 33.5
+      },
+      "latency_ms": {
+        "p50": 4.78,
+        "p95": 2003.88,
+        "p99": 2004.51,
+        "max": 2021.66
+      },
+      "latency_ms_by_replica": {
+        "A": {
+          "p50": 4.22,
+          "p95": 6.74
+        },
+        "B": {
+          "p50": 2003.33,
+          "p95": 2004.45
+        },
+        "C": {
+          "p50": 3.99,
+          "p95": 6.89
+        }
+      }
+    }
+  ]
+}
