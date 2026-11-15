@@ -195,6 +195,20 @@ ts("Envoy healthy / total hosts per cluster",
    [(f"envoy_cluster_membership_healthy{{{ENVOY}}}", "{{envoy_cluster_name}} healthy"),
     (f"envoy_cluster_membership_total{{{ENVOY}}}", "{{envoy_cluster_name}} total")], "short", 16, w=8)
 y[0] += 8
+# Failures that never reach a replica (stopped or unreachable host) only
+# exist in Envoy's counters; the per-replica error panels above can't show them
+ts("Envoy upstream failures per cluster [$window]",
+   "Connections Envoy could not open (refused / timed out), 5xx Envoy returned, and failed active health checks. "
+   "Calls the client gave up on before Envoy answered are only in the client results and the access log (DC/DR).",
+   [(f"sum by (envoy_cluster_name) (rate(envoy_cluster_upstream_cx_connect_fail{{{ENVOY}}}[$window]))",
+     "{{envoy_cluster_name}} connect fail"),
+    (f"sum by (envoy_cluster_name) (rate(envoy_cluster_upstream_cx_connect_timeout{{{ENVOY}}}[$window]))",
+     "{{envoy_cluster_name}} connect timeout"),
+    (f'sum by (envoy_cluster_name) (rate(envoy_cluster_upstream_rq{{{ENVOY},envoy_response_code=~"5.."}}[$window]))',
+     "{{envoy_cluster_name}} 5xx"),
+    (f"sum by (envoy_cluster_name) (rate(envoy_cluster_health_check_failure{{{ENVOY}}}[$window]))",
+     "{{envoy_cluster_name}} health check fail")], "reqps", 0, w=24)
+y[0] += 8
 
 dashboard = {
     "title": "Store A3 — Load balancing per replica",

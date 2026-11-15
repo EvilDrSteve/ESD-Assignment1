@@ -1,0 +1,117 @@
+{
+  "label": "hc-stop-b",
+  "runs": [
+    {
+      "interface": "http",
+      "target": "localhost:8050",
+      "operation": "GET /products/{id}",
+      "target_rate": 50.0,
+      "duration_s": 60.0,
+      "started_at": "2026-11-15T16:35:30+00:00",
+      "ended_at": "2026-11-15T16:36:30+00:00",
+      "sent": 3000,
+      "actual_rate": 50.02,
+      "max_send_lag_ms": 42.91,
+      "successes": 2926,
+      "failures": 74,
+      "error_rate_pct": 2.47,
+      "by_status": {
+        "200": 2926,
+        "timeout": 44,
+        "503": 30
+      },
+      "by_replica": {
+        "?": 74,
+        "A": 1195,
+        "B": 543,
+        "C": 1188
+      },
+      "share_pct": {
+        "?": 2.5,
+        "A": 39.8,
+        "B": 18.1,
+        "C": 39.6
+      },
+      "latency_ms": {
+        "p50": 7.07,
+        "p95": 12.25,
+        "p99": 2002.4,
+        "max": 2006.11
+      },
+      "latency_ms_by_replica": {
+        "?": {
+          "p50": 2002.25,
+          "p95": 2005.19
+        },
+        "A": {
+          "p50": 7.0,
+          "p95": 11.7
+        },
+        "B": {
+          "p50": 7.19,
+          "p95": 10.97
+        },
+        "C": {
+          "p50": 7.04,
+          "p95": 11.45
+        }
+      }
+    },
+    {
+      "interface": "grpc",
+      "target": "localhost:50051",
+      "operation": "OrderService/GetProduct",
+      "target_rate": 50.0,
+      "duration_s": 60.0,
+      "started_at": "2026-11-15T16:35:30+00:00",
+      "ended_at": "2026-11-15T16:36:30+00:00",
+      "sent": 3000,
+      "actual_rate": 50.02,
+      "max_send_lag_ms": 42.58,
+      "successes": 2932,
+      "failures": 68,
+      "error_rate_pct": 2.27,
+      "by_status": {
+        "OK": 2932,
+        "DEADLINE_EXCEEDED": 42,
+        "UNAVAILABLE": 26
+      },
+      "by_replica": {
+        "?": 68,
+        "A": 1193,
+        "B": 547,
+        "C": 1192
+      },
+      "share_pct": {
+        "?": 2.3,
+        "A": 39.8,
+        "B": 18.2,
+        "C": 39.7
+      },
+      "latency_ms": {
+        "p50": 5.51,
+        "p95": 10.5,
+        "p99": 2003.41,
+        "max": 2005.55
+      },
+      "latency_ms_by_replica": {
+        "?": {
+          "p50": 2002.95,
+          "p95": 2005.2
+        },
+        "A": {
+          "p50": 5.45,
+          "p95": 10.06
+        },
+        "B": {
+          "p50": 5.69,
+          "p95": 9.32
+        },
+        "C": {
+          "p50": 5.44,
+          "p95": 9.96
+        }
+      }
+    }
+  ]
+}

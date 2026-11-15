@@ -402,6 +402,139 @@ no longer appears in the config dump.
   it was sent again.
 - `scripts/fault.sh` now retries its request.
 
+### D3. Failure and recovery: stop B with active health checks
+
+**Change.** Round robin 1:1:1 with no delay, plus active health checks on both
+clusters (`envoy/health-checks.yaml`):
+
+| Setting | Value | Meaning |
+|---|---|---|
+| Probe | HTTP `GET /health`; gRPC `grpc.health.v1.Health/Check` with `service_name: ""` | Both exempt from the fault switch |
+| `interval` | 2 s | Envoy's main thread probes every host every 2 s, also with no traffic (`no_traffic_interval`) |
+| `timeout` | 1 s | A probe without an answer in 1 s counts as failed |
+| `unhealthy_threshold` | 2 | Two failed probes in a row remove the host |
+| `healthy_threshold` | 2 | Two passed probes bring back a host that was marked unhealthy |
+
+**Expected timing.**
+- **Removal:** between 1 and 2 probe intervals plus up to one timeout after B
+  dies, so about 2–5 s. During that window, B's third of the calls fail.
+- **Recovery:** about `healthy_threshold × interval` ≈ 2–4 s after B's app is
+  ready.
+- **In between:** A and C share the traffic 50/50.
+
+**Run.** `scripts/` has no wrapper for this; the commands were:
+
+```bash
+ENVOY_CONFIG=health-checks.yaml docker compose up -d --force-recreate envoy
+python clients/loadgen.py --interface both --rate 50 --duration 60 --label hc-stop-b &
+sleep 15; docker stop assignment-1-app-2          # 16:35:45.2
+sleep 20; docker start assignment-1-app-2         # 16:36:07.7
+docker compose up -d --force-recreate envoy       # restore (no health checks)
+```
+
+While it ran, Envoy's `/clusters` was polled every 0.5 s. The poll output, the
+health-check event log, Envoy's stats and every failed access-log line are in
+`evidence/a3/d3/`.
+
+**Timeline** (UTC, from the poll, Envoy's health event log and B's own logs):
+
+| Time | Event |
+|---|---|
+| 16:35:45.18 | `docker stop` B; B logs `grpc_stopping` at 45.54, uvicorn shuts down |
+| 16:35:45.38 | First failed call: Envoy can't connect to B's closed port, so it answers at once (`UF`, HTTP 503 / gRPC `UNAVAILABLE`) |
+| 16:35:45.52 | Last call answered by B |
+| 16:35:47.72 | B's container has exited (its IP is gone). Calls routed to B now hang on connect until the client's 2 s timeout (`DC` / `DR` in the access log) |
+| 16:35:49.60 | Last failed call |
+| ≈16:35:49.6 | Health checker ejects B from both clusters (`eject_unhealthy_event`, `NETWORK_TIMEOUT`); B flagged `/failed_active_hc/active_hc_timeout` |
+| 16:35:49.6 → 16:36:12 | Only A and C serve, 0 errors |
+| 16:35:55.8 | B disappears from the cluster entirely (STRICT_DNS: Docker DNS no longer resolves the stopped container's name) |
+| 16:36:07.74 | `docker start` B (same IP, 172.18.0.7) |
+| 16:36:10.58 | B's gRPC server up; uvicorn running right after |
+| 16:36:11.78 | DNS refresh brings B back; first gRPC probe passes, B healthy in `store_grpc` |
+| 16:36:12.29 | B healthy in `store_http` |
+| 16:36:12.78 | First call answered by B again |
+
+**Client results** (`evidence/a3/runs/hc-stop-b.json`)
+
+| Interface | Sent | Failures | Failure kinds | A / B / C answered | Client p95 | Client p99 |
+|---|---|---|---|---|---|---|
+| HTTP | 3000 | 74 (2.47%) | 30 × 503 (connect refused), 44 × 2 s timeout | 1195 / 543 / 1188 | 12.25 ms | 2002 ms |
+| gRPC | 3000 | 68 (2.27%) | 26 × `UNAVAILABLE`, 42 × `DEADLINE_EXCEEDED` | 1193 / 547 / 1192 | 10.5 ms | 2003 ms |
+
+- **Access log:** Envoy's access log has exactly these 142 failures, all
+  routed to `172.18.0.7` (`15-kibana-envoy-errors.jpg`).
+- **Envoy's counters:**
+  - `upstream_cx_connect_fail`: 72 (HTTP) and 27 (gRPC)
+  - `upstream_cx_connect_timeout`: 42 (HTTP) and 1 (gRPC)
+  - health-check failures: 3 per cluster
+  - The gRPC cluster had one long-lived HTTP/2 connection to B, so most gRPC
+    calls failed on that connection rather than on a new connect.
+- **Calls in flight at the stop:** none were lost.
+  `upstream_cx_destroy_remote_with_active_rq` = 0, because uvicorn and the gRPC
+  server drain on SIGTERM before exiting.
+
+**Observations** (`15-grafana-share-http.jpg`, `15-grafana-grpc.jpg`,
+`15-grafana-envoy-health-failures.jpg`):
+- **Rates:** B's rate falls to 0 and A and C rise to about 25/s each; after
+  the restart, B climbs back to about 16.7/s.
+- **Envoy hosts:** healthy and total hosts drop from 3 to 2 and come back.
+- **Envoy failures panel:** new in this PR; it shows connect failures and
+  failed health checks in the same window.
+- **The replicas' own error panels stay empty.** The failed calls never
+  reached a replica, so only Envoy's counters, its access log and the client
+  can show them. That is why the Envoy failures panel was added.
+
+**Explanation**
+- **Removal time:** about 4.4 s from the first failure (45.4) to ejection
+  (49.6). That is `unhealthy_threshold × interval` = 2 × 2 s, plus the wait
+  for the first failing probe, as expected.
+- **Errors:** during those 4.2 s, round robin kept sending B a third of the
+  calls. 4.2 s × 50/s × ⅓ ≈ 70 failed calls per interface, against 74 and 68
+  measured.
+- **The two kinds of failure differ:**
+  - A refused connection fails in about 0 ms, so the client gets a fast 503.
+  - A vanished IP makes the connect hang (Envoy's connect timeout is the
+    default 5 s), so the client waits out its full 2 s.
+  - A shorter `connect_timeout` on the clusters (e.g. 250 ms) would turn the
+    slow failures into fast ones.
+  - Retrying on another host (`retry_on: connect-failure`, safe for read-only
+    calls) would hide most of them. Both were left off, as the assignment
+    asks.
+- **Removal is bounded by the settings:**
+  - `interval` 1 s with `unhealthy_threshold` 2 would halve the window, at the
+    cost of twice the probe traffic and a higher chance of removing a replica
+    for one slow probe.
+  - Without health checks, B would only have left when DNS stopped resolving
+    it, at 16:35:55.8. That is 6 s later, and that path exists only because
+    Docker removes a stopped container's DNS name.
+- **Recovery** was faster than `healthy_threshold × interval`.
+  - DNS had removed B entirely, so when it came back Envoy treated it as a new
+    host, and a new host becomes healthy on its **first** passing probe
+    (`add_healthy_event: first_check`).
+  - The gap from start to traffic was: B ready at about 10.6, healthy at
+    11.8 / 12.3, serving at 12.8.
+  - Had B stayed in DNS (for example after a crash with the container still
+    running), it would have needed 2 passing probes, about 2–4 s.
+  - Recovery caused no errors, because Envoy only sends to B after a probe has
+    passed.
+- **A slow replica can still pass health checks.** Right after this run,
+  still with health checks on, I set a 2 s delay on B
+  (`--label hc-slow-b`, 10 calls/s for 20 s, in
+  `evidence/a3/runs/hc-slow-b.json`).
+  - **Health:** B stayed `healthy` in both clusters; health-check failures
+    stayed at 3, all from the stop above.
+  - **Client:** about a third of the calls (68 of 200 HTTP, 66 of 200 gRPC)
+    timed out on B.
+  - **Why:** the probe only asks "are you up?" (`/health` and
+    `grpc.health.v1` are exempt from the fault and answer in about 1 ms). A
+    replica that is up but too slow for its callers looks perfectly healthy.
+    Least request (D2) or outlier detection on latency or errors is what
+    catches that case.
+
+**Restore.** Envoy was recreated with the base config (no `health_checks` in
+the config dump) and all 6 hosts are healthy. The fault-switch gauge is 0 on
+A, B and C.
+
 ## Results table
 
 | Run / interface | Policy and fault | Target / actual rps | A / B / C share | Client p95 | Error rate | Explanation |
@@ -416,6 +549,8 @@ no longer appears in the config dump.
 | Slow B, RR / gRPC | RR 1:1:1, B +200 ms | 50 / 50.02 | 33.3 / 33.3 / 33.3 % | 204.56 ms | 0% | Same |
 | Slow B, LR / HTTP | Least request, B +200 ms | 50 / 50.02 | 42.8 / 14.8 / 42.3 % | 207.01 ms | 0% | B loses most pairings; 1/9 floor keeps p95 on B |
 | Slow B, LR / gRPC | Least request, B +200 ms | 50 / 50.02 | 41.9 / 14.2 / 43.9 % | 204.51 ms | 0% | Same; per-host active counts shared by workers |
+| Stop B, HC / HTTP | RR + health checks, B stopped 22 s | 50 / 50.02 | 39.8 / 18.1 / 39.6 % | 12.25 ms | 2.47% | B gets ⅓ until ejected after 4.4 s (2 × 2 s); then A/C only |
+| Stop B, HC / gRPC | RR + health checks, B stopped 22 s | 50 / 50.02 | 39.8 / 18.2 / 39.7 % | 10.5 ms | 2.27% | Same; recovery on first passing probe (B re-added by DNS) |
 
 ## Conclusions
 

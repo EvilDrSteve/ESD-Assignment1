@@ -115,6 +115,7 @@ docker compose up -d --force-recreate envoy                                   # 
 |---|---|
 | `weighted-2-1-1.yaml` | D1: weighted round robin, A:B:C = 2:1:1 |
 | `least-request.yaml` | D2: `LEAST_REQUEST` (power of two choices), equal weights |
+| `health-checks.yaml` | D3: round robin + active health checks (interval 2 s, timeout 1 s, unhealthy 2, healthy 2) |
 
 D2 (slow B, round robin vs least request):
 
@@ -127,6 +128,21 @@ docker compose up -d --force-recreate envoy
 bash scripts/fault.sh B off && bash scripts/fault.sh all status   # recover: delay 0 everywhere
 ```
 
+D3 (stop B during traffic, active health checks):
+
+```bash
+ENVOY_CONFIG=health-checks.yaml docker compose up -d --force-recreate envoy
+python clients/loadgen.py --interface both --rate 50 --duration 60 --label hc-stop-b &
+sleep 15; docker stop assignment-1-app-2
+sleep 20; docker start assignment-1-app-2
+wait
+# watch Envoy's view while it runs:
+curl -s localhost:9901/clusters | grep health_flags
+docker exec envoy cat /var/log/envoy/health.log     # eject / add events
+# recover: B running again, base config back
+docker start assignment-1-app-2; docker compose up -d --force-recreate envoy
+```
+
 Runs so far (`evidence/a3/runs/`, details in `report-a3.md`):
 
 | Run | Envoy config | HTTP A / B / C | gRPC A / B / C |
@@ -136,6 +152,8 @@ Runs so far (`evidence/a3/runs/`, details in `report-a3.md`):
 | `wrr-2-1-1` | Weighted round robin 2:1:1 | 1499 / 751 / 750 | 1500 / 750 / 750 |
 | `delayb-rr` | Round robin, B +200 ms | 999 / 1002 / 999 | 1000 / 1000 / 1000 |
 | `delayb-lr` | Least request, B +200 ms | 1285 / 445 / 1270 | 1258 / 426 / 1316 |
+| `hc-stop-b` | Round robin + health checks, B stopped 22 s | 1195 / 543 / 1188 (+74 failed) | 1193 / 547 / 1192 (+68 failed) |
+| `hc-slow-b` | Health checks, B +2 s (10/s for 20 s) | 68 / 0 / 64 (+68 timed out on B) | 66 / 67 / 67 (66 on B timed out) |
 
 The load client also prints and saves client p50/p95 **per replica**
 (`latency_ms_by_replica`), so a slow replica stands out directly.
