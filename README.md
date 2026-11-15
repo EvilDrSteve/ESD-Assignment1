@@ -133,14 +133,16 @@ Dashboard** for A1, **Store → Store A2 — HTTP vs gRPC: Place order**,
 ### A3 dashboard (`grafana/dashboards/store-a3.json`)
 
 Built by `scripts/build_a3_dashboard.py` (edit there, then re-run). The
-`rate window` dropdown sets `$window` (30s / **1m** / 2m); every panel title
-shows the window it uses. Replicas have fixed colours: A blue, B orange, C
-green. Application traffic only: `/metrics`, `/health` and gRPC health checks
-are excluded.
+`rate window` dropdown sets `$window` (**30s** / 1m / 2m); every panel title
+shows the window it uses. 30s is the default because a run lasts 60 s: with
+1m the rate never reaches a flat plateau. Graphs step at 2 s (the scrape
+interval) instead of Grafana's 15 s default. Replicas have fixed colours: A
+blue, B orange, C green. Application traffic only: `/metrics`, `/health` and
+gRPC health checks are excluded.
 
 | Panel | Query (HTTP; gRPC uses `grpc_server_*` the same way) |
 |---|---|
-| Share per replica over the time range | `100 * sum by (replica) (increase(http_requests_total{…}[$__range])) / scalar(sum(increase(…[$__range])))` |
+| Share per replica over the time range | one query per replica: `100 * (sum(increase(http_requests_total{…,replica="A"}[$__range])) or vector(0)) / scalar(sum(increase(http_requests_total{…}[$__range])))` (`or vector(0)` shows an idle replica as 0%) |
 | Request rate per replica | `sum by (replica) (rate(http_requests_total{job="store",endpoint!~"/metrics\|/health"}[$window]))` |
 | Share of total (%) | `100 * sum by (replica) (rate(…[$window])) / scalar(sum(rate(…[$window])))` |
 | Active requests | `sum by (replica) (http_requests_in_flight{…})` (gauge, sampled every 2 s) |
@@ -300,6 +302,8 @@ next (open loop: call *i* is due at `start + i/rate`). HTTP uses
 `GET /products/{id}`, gRPC uses `GetProduct` on one channel. There are no
 retries and no circuit breaker. Each call has its own request id
 (`lg-<label>-<h|g>-<n>`). Latency is measured from when the call was due.
+Request ids repeat if a label is reused, so give each run its own label, or
+limit the Kibana time range to the run.
 
 ```bash
 python clients/loadgen.py --interface http --rate 50 --duration 60 --label baseline-http

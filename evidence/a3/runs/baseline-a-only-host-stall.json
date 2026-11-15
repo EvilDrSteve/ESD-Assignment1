@@ -1,0 +1,71 @@
+{
+  "label": "baseline-a-only",
+  "runs": [
+    {
+      "interface": "http",
+      "target": "localhost:8050",
+      "operation": "GET /products/{id}",
+      "target_rate": 50.0,
+      "duration_s": 60.0,
+      "started_at": "2026-11-15T15:24:57+00:00",
+      "ended_at": "2026-11-15T15:25:57+00:00",
+      "sent": 3000,
+      "actual_rate": 50.02,
+      "max_send_lag_ms": 200.61,
+      "successes": 2744,
+      "failures": 256,
+      "error_rate_pct": 8.53,
+      "by_status": {
+        "200": 2744,
+        "timeout": 256
+      },
+      "by_replica": {
+        "?": 256,
+        "A": 2744
+      },
+      "share_pct": {
+        "?": 8.5,
+        "A": 91.5
+      },
+      "latency_ms": {
+        "p50": 9.02,
+        "p95": 2031.68,
+        "p99": 2183.52,
+        "max": 2420.12
+      }
+    },
+    {
+      "interface": "grpc",
+      "target": "localhost:50051",
+      "operation": "OrderService/GetProduct",
+      "target_rate": 50.0,
+      "duration_s": 60.0,
+      "started_at": "2026-11-15T15:24:57+00:00",
+      "ended_at": "2026-11-15T15:25:57+00:00",
+      "sent": 3000,
+      "actual_rate": 50.02,
+      "max_send_lag_ms": 218.54,
+      "successes": 2783,
+      "failures": 217,
+      "error_rate_pct": 7.23,
+      "by_status": {
+        "OK": 2783,
+        "DEADLINE_EXCEEDED": 217
+      },
+      "by_replica": {
+        "?": 212,
+        "A": 2788
+      },
+      "share_pct": {
+        "?": 7.1,
+        "A": 92.9
+      },
+      "latency_ms": {
+        "p50": 6.74,
+        "p95": 2003.85,
+        "p99": 2295.77,
+        "max": 2895.32
+      }
+    }
+  ]
+}
