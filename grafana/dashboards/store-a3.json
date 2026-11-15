@@ -21,20 +21,20 @@
         "type": "custom",
         "query": "30s,1m,2m",
         "current": {
-          "text": "1m",
-          "value": "1m",
+          "text": "30s",
+          "value": "30s",
           "selected": true
         },
         "options": [
           {
             "text": "30s",
             "value": "30s",
-            "selected": false
+            "selected": true
           },
           {
             "text": "1m",
             "value": "1m",
-            "selected": true
+            "selected": false
           },
           {
             "text": "2m",
@@ -141,6 +141,7 @@
         "orientation": "horizontal",
         "displayMode": "basic",
         "showUnfilled": true,
+        "namePlacement": "left",
         "reduceOptions": {
           "calcs": [
             "lastNotNull"
@@ -154,9 +155,29 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "100 * sum by (replica) (increase(http_requests_total{job=\"store\",endpoint!~\"/metrics|/health\"}[$__range])) / scalar(sum(increase(http_requests_total{job=\"store\",endpoint!~\"/metrics|/health\"}[$__range])))",
-          "legendFormat": "{{replica}}",
+          "expr": "100 * (sum(increase(http_requests_total{job=\"store\",endpoint!~\"/metrics|/health\",replica=\"A\"}[$__range])) or vector(0)) / scalar(sum(increase(http_requests_total{job=\"store\",endpoint!~\"/metrics|/health\"}[$__range])))",
+          "legendFormat": "A",
           "refId": "A",
+          "instant": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "100 * (sum(increase(http_requests_total{job=\"store\",endpoint!~\"/metrics|/health\",replica=\"B\"}[$__range])) or vector(0)) / scalar(sum(increase(http_requests_total{job=\"store\",endpoint!~\"/metrics|/health\"}[$__range])))",
+          "legendFormat": "B",
+          "refId": "B",
+          "instant": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "100 * (sum(increase(http_requests_total{job=\"store\",endpoint!~\"/metrics|/health\",replica=\"C\"}[$__range])) or vector(0)) / scalar(sum(increase(http_requests_total{job=\"store\",endpoint!~\"/metrics|/health\"}[$__range])))",
+          "legendFormat": "C",
+          "refId": "C",
           "instant": true
         }
       ]
@@ -239,6 +260,7 @@
         "orientation": "horizontal",
         "displayMode": "basic",
         "showUnfilled": true,
+        "namePlacement": "left",
         "reduceOptions": {
           "calcs": [
             "lastNotNull"
@@ -252,9 +274,29 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "100 * sum by (replica) (increase(grpc_server_handled_total{job=\"store\",grpc_service!=\"grpc.health.v1.Health\"}[$__range])) / scalar(sum(increase(grpc_server_handled_total{job=\"store\",grpc_service!=\"grpc.health.v1.Health\"}[$__range])))",
-          "legendFormat": "{{replica}}",
+          "expr": "100 * (sum(increase(grpc_server_handled_total{job=\"store\",grpc_service!=\"grpc.health.v1.Health\",replica=\"A\"}[$__range])) or vector(0)) / scalar(sum(increase(grpc_server_handled_total{job=\"store\",grpc_service!=\"grpc.health.v1.Health\"}[$__range])))",
+          "legendFormat": "A",
           "refId": "A",
+          "instant": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "100 * (sum(increase(grpc_server_handled_total{job=\"store\",grpc_service!=\"grpc.health.v1.Health\",replica=\"B\"}[$__range])) or vector(0)) / scalar(sum(increase(grpc_server_handled_total{job=\"store\",grpc_service!=\"grpc.health.v1.Health\"}[$__range])))",
+          "legendFormat": "B",
+          "refId": "B",
+          "instant": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "100 * (sum(increase(grpc_server_handled_total{job=\"store\",grpc_service!=\"grpc.health.v1.Health\",replica=\"C\"}[$__range])) or vector(0)) / scalar(sum(increase(grpc_server_handled_total{job=\"store\",grpc_service!=\"grpc.health.v1.Health\"}[$__range])))",
+          "legendFormat": "C",
+          "refId": "C",
           "instant": true
         }
       ]
@@ -327,9 +369,29 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "up{job=\"store\"}",
-          "legendFormat": "{{replica}}",
+          "expr": "up{job=\"store\",replica=\"A\"}",
+          "legendFormat": "A",
           "refId": "A",
+          "instant": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "up{job=\"store\",replica=\"B\"}",
+          "legendFormat": "B",
+          "refId": "B",
+          "instant": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "up{job=\"store\",replica=\"C\"}",
+          "legendFormat": "C",
+          "refId": "C",
           "instant": true
         }
       ]
@@ -388,9 +450,29 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "injected_delay_seconds{job=\"store\"}",
-          "legendFormat": "{{replica}}",
+          "expr": "injected_delay_seconds{job=\"store\",replica=\"A\"}",
+          "legendFormat": "A",
           "refId": "A",
+          "instant": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "injected_delay_seconds{job=\"store\",replica=\"B\"}",
+          "legendFormat": "B",
+          "refId": "B",
+          "instant": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "injected_delay_seconds{job=\"store\",replica=\"C\"}",
+          "legendFormat": "C",
+          "refId": "C",
           "instant": true
         }
       ]
@@ -423,6 +505,7 @@
         "x": 0,
         "y": 8
       },
+      "interval": "2s",
       "fieldConfig": {
         "defaults": {
           "unit": "reqps",
@@ -533,6 +616,7 @@
         "x": 12,
         "y": 8
       },
+      "interval": "2s",
       "fieldConfig": {
         "defaults": {
           "unit": "percent",
@@ -636,6 +720,7 @@
         "x": 0,
         "y": 16
       },
+      "interval": "2s",
       "fieldConfig": {
         "defaults": {
           "unit": "short",
@@ -737,6 +822,7 @@
         "x": 12,
         "y": 16
       },
+      "interval": "2s",
       "fieldConfig": {
         "defaults": {
           "unit": "s",
@@ -847,6 +933,7 @@
         "x": 0,
         "y": 24
       },
+      "interval": "2s",
       "fieldConfig": {
         "defaults": {
           "unit": "reqps",
@@ -961,6 +1048,7 @@
         "x": 0,
         "y": 33
       },
+      "interval": "2s",
       "fieldConfig": {
         "defaults": {
           "unit": "reqps",
@@ -1071,6 +1159,7 @@
         "x": 12,
         "y": 33
       },
+      "interval": "2s",
       "fieldConfig": {
         "defaults": {
           "unit": "percent",
@@ -1174,6 +1263,7 @@
         "x": 0,
         "y": 41
       },
+      "interval": "2s",
       "fieldConfig": {
         "defaults": {
           "unit": "short",
@@ -1275,6 +1365,7 @@
         "x": 12,
         "y": 41
       },
+      "interval": "2s",
       "fieldConfig": {
         "defaults": {
           "unit": "s",
@@ -1385,6 +1476,7 @@
         "x": 0,
         "y": 49
       },
+      "interval": "2s",
       "fieldConfig": {
         "defaults": {
           "unit": "reqps",
@@ -1499,6 +1591,7 @@
         "x": 0,
         "y": 58
       },
+      "interval": "2s",
       "fieldConfig": {
         "defaults": {
           "unit": "reqps",
@@ -1600,6 +1693,7 @@
         "x": 8,
         "y": 58
       },
+      "interval": "2s",
       "fieldConfig": {
         "defaults": {
           "unit": "short",
@@ -1701,6 +1795,7 @@
         "x": 16,
         "y": 58
       },
+      "interval": "2s",
       "fieldConfig": {
         "defaults": {
           "unit": "short",

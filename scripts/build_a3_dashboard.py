@@ -46,6 +46,7 @@ def ts(title, desc, targets, unit, x, w=12, h=8, extra_defaults=None, stack=Fals
     panels.append({
         "id": pid(), "type": "timeseries", "title": title, "description": desc, "datasource": DS,
         "gridPos": {"h": h, "w": w, "x": x, "y": y[0]},
+        "interval": "2s",  # = scrape interval; Grafana otherwise steps at 15 s and flattens a 60 s run
         "fieldConfig": {"defaults": defaults, "overrides": replica_overrides()},
         "options": {"legend": {"displayMode": "table", "placement": "bottom", "calcs": ["mean", "lastNotNull", "max"]},
                     "tooltip": {"mode": "multi", "sort": "none"}},
@@ -61,15 +62,26 @@ def bargauge(title, desc, expr, x, w=6, h=6):
         "fieldConfig": {"defaults": {"unit": "percent", "min": 0, "max": 100, "decimals": 1,
                                      "color": {"mode": "fixed", "fixedColor": "text"}},
                         "overrides": replica_overrides()},
+        # namePlacement left: keep the replica name even when only one replica has traffic
         "options": {"orientation": "horizontal", "displayMode": "basic", "showUnfilled": True,
+                    "namePlacement": "left",
                     "reduceOptions": {"calcs": ["lastNotNull"], "values": False}},
-        "targets": [{"datasource": DS, "expr": expr, "legendFormat": "{{replica}}", "refId": "A", "instant": True}],
+        "targets": [{"datasource": DS, "expr": e, "legendFormat": r, "refId": r, "instant": True}
+                    for r, e in expr.items()],
     })
 
 
+def per_replica(template):
+    """One instant query per replica, so stat tiles are always in A, B, C order."""
+    return [{"datasource": DS, "expr": template.format(r=r), "legendFormat": r, "refId": r, "instant": True}
+            for r in COLORS]
+
+
 def share_expr(counter_sel, window):
-    return (f"100 * sum by (replica) (increase({counter_sel}[{window}])) "
-            f"/ scalar(sum(increase({counter_sel}[{window}])))")
+    """One query per replica; `or vector(0)` keeps a replica that got no calls as a 0% bar."""
+    total = f"scalar(sum(increase({counter_sel}[{window}])))"
+    return {r: f'100 * (sum(increase({counter_sel[:-1]},replica="{r}"}}[{window}])) or vector(0)) / {total}'
+            for r in COLORS}
 
 
 # ── Summary: share of calls over the whole selected time range ──
@@ -93,7 +105,7 @@ panels.append({
                     "overrides": []},
     "options": {"colorMode": "background", "graphMode": "none", "textMode": "value_and_name",
                 "reduceOptions": {"calcs": ["lastNotNull"], "values": False}},
-    "targets": [{"datasource": DS, "expr": 'up{job="store"}', "legendFormat": "{{replica}}", "refId": "A", "instant": True}],
+    "targets": per_replica('up{{job="store",replica="{r}"}}'),
 })
 panels.append({
     "id": pid(), "type": "stat", "title": "Injected delay per replica (fault switch)", "datasource": DS,
@@ -105,8 +117,7 @@ panels.append({
                     "overrides": []},
     "options": {"colorMode": "background", "graphMode": "none", "textMode": "value_and_name",
                 "reduceOptions": {"calcs": ["lastNotNull"], "values": False}},
-    "targets": [{"datasource": DS, "expr": 'injected_delay_seconds{job="store"}', "legendFormat": "{{replica}}",
-                 "refId": "A", "instant": True}],
+    "targets": per_replica('injected_delay_seconds{{job="store",replica="{r}"}}'),
 })
 y[0] += 6
 
@@ -189,10 +200,12 @@ dashboard = {
     "time": {"from": "now-15m", "to": "now"},
     "schemaVersion": 39,
     "version": 1,
+    # Default 30s: an experiment run lasts 60 s, so a 1m window never shows a
+    # steady plateau (the curve is a triangle peaking at the end of the run)
     "templating": {"list": [{
         "name": "window", "label": "rate window", "type": "custom", "query": "30s,1m,2m",
-        "current": {"text": "1m", "value": "1m", "selected": True},
-        "options": [{"text": w, "value": w, "selected": w == "1m"} for w in ("30s", "1m", "2m")],
+        "current": {"text": "30s", "value": "30s", "selected": True},
+        "options": [{"text": w, "value": w, "selected": w == "30s"} for w in ("30s", "1m", "2m")],
         "hide": 0,
     }]},
     "annotations": {"list": []},
