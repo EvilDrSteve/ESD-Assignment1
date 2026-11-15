@@ -164,24 +164,49 @@ def test_rate_limit_returns_429_with_retry_after(client):
 
 
 def test_rate_limiter_window_resets():
+    import time
+    import pytest
+    from conftest import FAKE_REDIS
     from ratelimit import FixedWindowLimiter, RateLimited
-    now = [0.0]
-    limiter = FixedWindowLimiter(2, 10, clock=lambda: now[0])
+    limiter = FixedWindowLimiter(2, 10, name="t")
     limiter.hit("ip")
     limiter.hit("ip")
-    try:
+    with pytest.raises(RateLimited) as e:
         limiter.hit("ip")
-        assert False, "expected RateLimited"
-    except RateLimited as e:
-        assert e.retry_after == 10
-    now[0] = 7.5
-    try:
-        limiter.hit("ip")
-    except RateLimited as e:
-        assert e.retry_after == 3
-    limiter.hit("other-ip")  # separate clients have separate budgets
-    now[0] = 10.0
-    assert limiter.hit("ip") == 1
+    assert e.value.retry_after == 10
+    assert limiter.hit("other-ip") == 1  # separate clients have separate budgets
+    FAKE_REDIS.pexpire(limiter.key("ip"), 50)  # jump to the end of the window
+    time.sleep(0.1)
+    assert limiter.hit("ip") == 1  # new window, full budget again
+
+
+def test_rate_limit_shared_across_replicas():
+    """Two limiter instances (= two replicas) on one Redis share one budget (A3)."""
+    import pytest
+    from ratelimit import FixedWindowLimiter, RateLimited
+    replica_a = FixedWindowLimiter(5, 10, name="shared")
+    replica_b = FixedWindowLimiter(5, 10, name="shared")
+    for i in range(5):  # round robin: A, B, A, B, A
+        (replica_a if i % 2 == 0 else replica_b).hit("10.0.0.7")
+    with pytest.raises(RateLimited):  # 6th call, whichever replica gets it
+        replica_b.hit("10.0.0.7")
+    with pytest.raises(RateLimited):
+        replica_a.hit("10.0.0.7")
+
+
+def test_rate_limit_uses_x_forwarded_for(client):
+    """Behind Envoy every socket address is Envoy's; the client is the last X-Forwarded-For entry."""
+    import main
+
+    def order(i, xff):
+        fill_cart(client, cart_id=f"xff-{i}")
+        return client.post("/orders", json={"cart_id": f"xff-{i}"},
+                           headers={"X-Forwarded-For": xff}).status_code
+
+    statuses = [order(i, "10.0.0.1") for i in range(main.ORDERS_RATE_LIMIT + 1)]
+    assert statuses[-1] == 429
+    assert order(10, "10.0.0.2") == 201              # another client: its own budget
+    assert order(11, "6.6.6.6, 10.0.0.1") == 429     # forged first entry is ignored
 
 
 # ── Faults, request ids, metrics ──────────────────────────────────────────

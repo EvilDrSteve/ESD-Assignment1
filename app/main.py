@@ -294,9 +294,23 @@ def remove_cart_item(cart_id: str, product_id: str):
 # ── Orders ────────────────────────────────────────────────────────────────
 
 
+def client_ip(request: Request) -> str:
+    """The caller's address, as seen by Envoy.
+
+    Behind Envoy the socket address is always Envoy's. Envoy (use_remote_address)
+    appends the address it saw to X-Forwarded-For, so the last entry is the real
+    client; earlier entries were sent by the client itself and could be forged.
+    Without the header (direct call, tests) the socket address is used.
+    """
+    forwarded = request.headers.get("X-Forwarded-For", "")
+    if forwarded.strip():
+        return forwarded.split(",")[-1].strip()[:64]
+    return request.client.host if request.client else "unknown"
+
+
 def limit_orders(request: Request) -> int:
     try:
-        return orders_limiter.hit(request.client.host if request.client else "unknown")
+        return orders_limiter.hit(client_ip(request))
     except RateLimited:
         http_rate_limited_total.labels(endpoint="/orders").inc()
         logger.warning("rate_limited", extra={"endpoint": "/orders"})

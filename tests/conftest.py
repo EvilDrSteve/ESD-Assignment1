@@ -22,9 +22,7 @@ store_module.store.r = FAKE_REDIS
 @pytest.fixture(autouse=True)
 def clean_store():
     FAKE_REDIS.flushall()
-    store_module.store.seed()
-    import main
-    main.orders_limiter.reset()
+    store_module.store.seed()  # flushall also cleared the rate-limit counters
     yield
 
 
