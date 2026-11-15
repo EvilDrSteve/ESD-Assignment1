@@ -1,13 +1,25 @@
-"""Fixed-window rate limiter, kept in process memory (single instance only).
+"""Fixed-window rate limiter, shared by all replicas through Redis (A3).
 
 Each client IP gets `limit` calls per `window_s`-second window. The window
 starts at the client's first call; once it is used up, calls get 429 until
 the window ends, and Retry-After says how many seconds that is.
+
+A2 kept the counters in process memory. With three replicas behind a round
+robin balancer that gives every client three separate budgets (~3x the
+limit), so the counter now lives in one Redis key per client:
+
+    ratelimit:orders:<client ip>   value = calls so far, TTL = rest of the window
+
+One MULTI/EXEC transaction per call, so concurrent calls on different
+replicas can't both slip through:
+    SET key 0 EX window NX   first call of a window creates the key and its expiry
+    INCR key                 count this call
+    PTTL key                 time left in the window, for Retry-After
 """
 
 import math
-import threading
-import time
+
+from store import store
 
 
 class RateLimited(Exception):
@@ -19,26 +31,27 @@ class RateLimited(Exception):
 
 
 class FixedWindowLimiter:
-    def __init__(self, limit: int, window_s: int, clock=time.monotonic):
+    def __init__(self, limit: int, window_s: int, name: str = "orders", redis_client=None):
         self.limit = limit
         self.window_s = window_s
-        self.clock = clock
-        self._windows: dict[str, tuple[float, int]] = {}  # client -> (window_start, count)
-        self._lock = threading.Lock()
+        self.prefix = f"ratelimit:{name}"
+        self._redis = redis_client  # None: use the store's Redis (looked up per call)
+
+    @property
+    def redis(self):
+        return self._redis or store.r
+
+    def key(self, client: str) -> str:
+        return f"{self.prefix}:{client}"
 
     def hit(self, client: str) -> int:
         """Count one call. Returns remaining calls, or raises RateLimited."""
-        now = self.clock()
-        with self._lock:
-            start, count = self._windows.get(client, (now, 0))
-            if now - start >= self.window_s:
-                start, count = now, 0
-            if count >= self.limit:
-                retry_after = max(1, math.ceil(start + self.window_s - now))
-                raise RateLimited(self.limit, self.window_s, retry_after)
-            self._windows[client] = (start, count + 1)
-            return self.limit - count - 1
-
-    def reset(self):
-        with self._lock:
-            self._windows.clear()
+        key = self.key(client)
+        pipe = self.redis.pipeline(transaction=True)
+        pipe.set(key, 0, ex=self.window_s, nx=True)
+        pipe.incr(key)
+        pipe.pttl(key)
+        _, count, ttl_ms = pipe.execute()
+        if count > self.limit:
+            raise RateLimited(self.limit, self.window_s, max(1, math.ceil(ttl_ms / 1000)))
+        return self.limit - count

@@ -173,9 +173,16 @@ Regenerate after changing routes: `python scripts/export_openapi.py`.
 
 ### Rate limit
 
-`POST /orders`: **5 requests per 10 s window per client IP** (in-process,
-single instance; `ORDERS_RATE_LIMIT` / `ORDERS_RATE_WINDOW_S`). The 6th call
-in a window gets `429` with `Retry-After` (seconds until the window ends).
+`POST /orders`: **5 requests per 10 s window per client IP**
+(`ORDERS_RATE_LIMIT` / `ORDERS_RATE_WINDOW_S`). The 6th call in a window gets
+`429` with `Retry-After` (seconds until the window ends).
+
+A3: the counter is one Redis key per client (`ratelimit:orders:<ip>`, TTL =
+rest of the window), so all replicas share one budget. In A2 it was in
+process memory, which behind round robin would give each client three
+separate budgets (about 15 orders per window instead of 5). The client IP is
+the last `X-Forwarded-For` entry (added by Envoy), because the socket address
+is always Envoy's.
 
 ```bash
 bash scripts/rate_limit_demo.sh
