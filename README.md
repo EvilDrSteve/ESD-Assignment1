@@ -121,7 +121,7 @@ index template, then exits), Kibana and Filebeat. Give it about 30 s.
 | Envoy admin | http://localhost:9901 (`/clusters`, `/stats/prometheus`) |
 | Envoy access log | `docker exec envoy tail -f /var/log/envoy/access.log` (JSON, one line per request/call) |
 | Replica logs | `docker compose logs app` or `/var/log/app/app-A.log` (B, C) in the `app_logs` volume |
-| Prometheus | http://localhost:9090 (job `store`: one target per replica) |
+| Prometheus | http://localhost:9090 (job `store`: `assignment-1-app-1/2/3:8050` with label `replica` A/B/C; job `envoy`: `envoy:9901/stats/prometheus`) |
 | Grafana | http://localhost:3000 (admin / admin) |
 | Kibana | http://localhost:5601 |
 
