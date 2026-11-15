@@ -133,6 +133,19 @@ Kibana: create a data view `store-logs-*` with `@timestamp`, then search, e.g.
 `request_id : "trace-demo-1"`, `transport : "grpc" and grpc_code : *` or
 `replica : "B"`.
 
+Replica lines have `log_source : "app"`, Envoy access-log lines
+`log_source : "envoy"`. Both carry the same `request_id`, so one search finds
+the proxy event and the replica event of one request (`.keyword` = exact match):
+
+| Interface | Kibana search | Returns |
+|---|---|---|
+| HTTP | `request_id.keyword : "trace-http-t1"` | Envoy line (`upstream_cluster: store_http`, `upstream_host`, `replica`, `response_code`) + replica line (`message: request`, `endpoint`, `status`) |
+| gRPC | `request_id.keyword : "trace-grpc-t1"` | Envoy line (`upstream_cluster: store_grpc`, `path: /store.v1.OrderService/GetProduct`, `grpc_status`) + replica line (`message: rpc`, `grpc_code`) |
+
+Send your own traced calls with `curl -H "X-Request-ID: my-id" localhost:8050/products/p1`
+or `python clients/grpc_client.py ... --request-id my-id`. Saved examples:
+`evidence/a3/log-examples.md`.
+
 Stop: `docker compose down` (add `-v` to delete the data volumes).
 
 ## Host environment (tests and clients)
