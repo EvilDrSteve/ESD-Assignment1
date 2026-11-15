@@ -1,3 +1,7 @@
+# Fixed project name: replica containers are always assignment-1-app-1/2/3,
+# whatever the folder is called (Envoy and Prometheus address them by name).
+name: assignment-1
+
 services:
 
   # ── Application ────────────────────────────────────────────────────────────
@@ -40,6 +44,24 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+
+  # Load balancer (A3): the only way in from the host. Same host ports as A2,
+  # so every A2 client and script now goes through Envoy unchanged.
+  envoy:
+    image: envoyproxy/envoy:v1.31.2
+    container_name: envoy
+    ports:
+      - "8050:8050"     # HTTP listener
+      - "50051:50051"   # gRPC listener
+      - "9901:9901"     # admin, /stats/prometheus
+    environment:
+      - ENVOY_UID=0     # run as root so it can write to the shared log volume
+    volumes:
+      - ./envoy/envoy.yaml:/etc/envoy/envoy.yaml:ro
+      - envoy_logs:/var/log/envoy
+    depends_on:
+      - app
+    restart: unless-stopped
 
   # ── Metrics stack ─────────────────────────────────────────────────────────
   prometheus:
@@ -137,3 +159,4 @@ volumes:
   es_data:
   filebeat_data:
   app_logs:
+  envoy_logs:

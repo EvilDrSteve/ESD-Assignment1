@@ -14,6 +14,7 @@ from prometheus_client import Counter, Gauge, Histogram
 import faults
 from logger import logger, request_id_var, transport_var
 from metrics import LATENCY_BUCKETS
+from replica import REPLICA
 
 REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 # Health checks must see the replica as it is: a slow replica is still healthy
@@ -60,7 +61,8 @@ class ObservabilityInterceptor(grpc.ServerInterceptor):
             request_id = incoming if REQUEST_ID_RE.match(incoming) else str(uuid.uuid4())
             rid_token = request_id_var.set(request_id)
             transport_token = transport_var.set("grpc")
-            context.send_initial_metadata((("x-request-id", request_id),))
+            # x-replica (A3): which replica answered; Envoy logs it, the load client counts it
+            context.send_initial_metadata((("x-request-id", request_id), ("x-replica", REPLICA)))
 
             in_flight = grpc_server_in_flight.labels(grpc_service=service, grpc_method=method)
             in_flight.inc()
