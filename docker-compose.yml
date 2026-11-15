@@ -149,6 +149,7 @@ services:
     volumes:
       - ./filebeat/filebeat.yml:/tmp/filebeat.yml:ro
       - app_logs:/var/log/app:ro
+      - envoy_logs:/var/log/envoy:ro      # Envoy access log (A3)
       - filebeat_data:/usr/share/filebeat/data
     depends_on:
       - es-init
