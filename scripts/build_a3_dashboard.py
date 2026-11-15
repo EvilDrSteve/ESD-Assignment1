@@ -27,10 +27,17 @@ def pid():
 
 
 def replica_overrides():
+    # "total" gets a fixed neutral dashed line; left to the palette it took
+    # whichever colour came next, which can be B's orange
     return [{
         "matcher": {"id": "byRegexp", "options": f"^{r}( .*)?$"},
         "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": c}}],
-    } for r, c in COLORS.items()]
+    } for r, c in COLORS.items()] + [{
+        "matcher": {"id": "byName", "options": "total"},
+        "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": "text"}},
+                       {"id": "custom.lineStyle", "value": {"fill": "dash", "dash": [10, 10]}},
+                       {"id": "custom.fillOpacity", "value": 0}],
+    }]
 
 
 def row(title):

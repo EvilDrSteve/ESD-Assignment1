@@ -93,8 +93,20 @@ gRPC client's single long-lived connection would pin all its calls to one
 replica. Envoy keeps the caller's `X-Request-ID` (`preserve_external_request_id`),
 appends the caller's address to `X-Forwarded-For`, and writes one JSON access
 log line per request with `request_id`, `upstream_host` and `replica` (from
-the `X-Replica` response header each replica sets). Part A: both clusters
-list replica A only.
+the `X-Replica` response header each replica sets).
+
+Current config (Part C, the starting point for every experiment): both
+clusters list A, B and C with `load_balancing_weight: 1` and
+`lb_policy: ROUND_ROBIN`. The Part A/B baseline listed A only. After editing
+`envoy/envoy.yaml`, apply it with `docker compose up -d --force-recreate envoy`.
+Check it with `curl -s localhost:9901/clusters | grep -E "hostname|health_flags"`.
+
+Runs so far (`evidence/a3/runs/`, details in `report-a3.md`):
+
+| Run | Envoy config | HTTP A / B / C | gRPC A / B / C |
+|---|---|---|---|
+| `baseline-a-only` | A only | 3000 / 0 / 0 | 3000 / 0 / 0 |
+| `rr-equal` | Round robin 1:1:1 | 1000 / 999 / 1001 | 1000 / 1000 / 1000 |
 
 ## Prerequisites
 

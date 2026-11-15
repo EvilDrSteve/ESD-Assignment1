@@ -9,7 +9,9 @@
 # one per connection, and a gRPC client keeps one connection open, so all its
 # calls would land on one replica.
 #
-# Part A: the clusters contain replica A only; B and C run but get no traffic.
+# Part C: both clusters contain A, B and C with equal weights (1:1:1) and
+# ROUND_ROBIN, so Envoy takes the replicas in turn, per request / per call.
+# (Part A/B baseline: A only.)
 
 admin:
   address:
@@ -112,6 +114,11 @@ static_resources:
         endpoints:
           - lb_endpoints:
               - endpoint: { hostname: A, address: { socket_address: { address: assignment-1-app-1, port_value: 8050 } } }
+                load_balancing_weight: 1
+              - endpoint: { hostname: B, address: { socket_address: { address: assignment-1-app-2, port_value: 8050 } } }
+                load_balancing_weight: 1
+              - endpoint: { hostname: C, address: { socket_address: { address: assignment-1-app-3, port_value: 8050 } } }
+                load_balancing_weight: 1
 
     - name: store_grpc
       type: STRICT_DNS
@@ -125,3 +132,8 @@ static_resources:
         endpoints:
           - lb_endpoints:
               - endpoint: { hostname: A, address: { socket_address: { address: assignment-1-app-1, port_value: 50051 } } }
+                load_balancing_weight: 1
+              - endpoint: { hostname: B, address: { socket_address: { address: assignment-1-app-2, port_value: 50051 } } }
+                load_balancing_weight: 1
+              - endpoint: { hostname: C, address: { socket_address: { address: assignment-1-app-3, port_value: 50051 } } }
+                load_balancing_weight: 1

@@ -106,9 +106,90 @@ and 7.2% of gRPC calls to the 2 s timeout.
   evidence. Each result is checked against the client's send lag and against
   replicas that should be unaffected.
 
-## Part C: Round robin
+## Part C: Round robin across A, B, C
 
-*#12*
+**Setup.** Both Envoy clusters now list A, B and C, each with
+`load_balancing_weight: 1`, and use `lb_policy: ROUND_ROBIN`.
+- Both listeners are HTTP connection managers. On the gRPC side that means
+  Envoy terminates HTTP/2 and picks a replica **per call**, not per
+  connection.
+- Upstream, `store_grpc` speaks HTTP/2 and `store_http` speaks HTTP/1.1.
+- The workload is unchanged from Part B (`--label rr-equal`, run 16:08:32 to
+  16:09:32 UTC, result in `evidence/a3/runs/rr-equal.json`). This is the
+  starting point for every Part D run.
+
+**Prediction.** About 33% each on both interfaces, no errors, and per-replica
+rates of about 16.7/s instead of 50/s on A.
+
+**Client results**
+
+| Interface | Actual rps | Sent | Failures | A / B / C calls | A / B / C share | Client p95 (A-only → RR) |
+|---|---|---|---|---|---|---|
+| HTTP | 50.02 | 3000 | 0 | 1000 / 999 / 1001 | 33.3 / 33.3 / 33.4 % | 9.34 → 8.51 ms |
+| gRPC | 50.02 | 3000 | 0 | 1000 / 1000 / 1000 | 33.3 / 33.3 / 33.3 % | 7.08 → 5.88 ms |
+
+**Checked against Envoy's access log** (the log Envoy wrote and the same
+records in Elasticsearch, `12-kibana-envoy-by-replica.jpg`):
+- `store_grpc`: A 1000, B 1000, C 1000.
+- `store_http`: A 1000, B 999, C 1001.
+- The replicas' own logs for the run: A 2000, B 1999, C 2001.
+
+The client, Envoy and the replicas agree call for call.
+
+**Dashboard** (`12-grafana-share-http.jpg`, `12-grafana-grpc.jpg`,
+`12-grafana-envoy.jpg`):
+- **Rates:** the three lines sit on top of each other at about 16.7 req/s per
+  interface, and the dashed total line is at 50.
+- **Share over the run:** HTTP 33.6 / 33.3 / 33.1 %, gRPC 34.0 / 33.3 /
+  32.7 %. These are close to the exact counts but not equal to them.
+  - `increase()` estimates each counter's growth from 2 s samples and
+    extrapolates to the edges of the time range.
+  - The three replicas are scraped at slightly different moments, so the edges
+    cut each one differently.
+  - So the client and log counts are the exact numbers; the dashboard is right
+    to about ±1%.
+- **Server-side latency:** p50 1.3 ms and p95 about 2.4 ms on every replica,
+  the same as A alone in Part B.
+- **Errors and health:** no errors; Envoy shows 3 of 3 hosts healthy in each
+  cluster.
+
+**Why gRPC is exact and HTTP is almost exact.** Envoy runs one worker thread
+per core (16 here), and every worker keeps its **own** round-robin position.
+
+*gRPC:*
+- The client uses one channel, which is one HTTP/2 connection
+  (`http.grpc.downstream_cx_total = 1`), so a single worker handles every
+  call.
+- That worker rotates strictly A → B → C. Over 3000 calls, no replica was
+  ever picked twice in a row.
+- The worker holds one multiplexed HTTP/2 connection to each replica
+  (`cluster.store_grpc.upstream_cx_total = 3`).
+
+*HTTP:*
+- The client spreads its calls over a pool of HTTP/1.1 connections. Envoy
+  saw about 10 from the load client (16 downstream connections in total,
+  including earlier `curl` tests).
+- Those connections land on different workers, each rotating on its own,
+  and Envoy opened 28 upstream connections.
+- The interleaved rotations still add up to an even split, but not a strict
+  sequence: a replica was picked twice in a row 4 times in 3000 calls.
+
+**HTTP/2 matters for gRPC.** If the gRPC listener were a TCP proxy, Envoy would
+choose a replica once, for the client's single connection, and all 3000 calls
+would go to that replica. Per-call balancing needs a listener that understands
+HTTP/2 streams.
+
+**Compared with Part B.**
+- **Load:** each replica now does a third of the work.
+- **Latency:** the client p95 improved a little (HTTP −0.8 ms, gRPC −1.2 ms).
+  At 50 calls/s, A alone was nowhere near saturation (in-flight about 0.1), so
+  spreading the load barely changes latency; most of the client's time is
+  Envoy and the network, not queueing on a replica.
+- **When it would matter:** the benefit of round robin shows up when one
+  replica is slow, overloaded or down, which is what Part D tests.
+- **Noise:** one brief host pause appears here too (client max 410 ms, a spike
+  of 7 in-flight on A at 16:09:07). It is too short to change the shares or
+  p95.
 
 ## Part D: Experiments
 
@@ -120,6 +201,8 @@ and 7.2% of gRPC calls to the 2 s timeout.
 |---|---|---|---|---|---|---|
 | Baseline / HTTP | A only, no fault | 50 / 50.02 | 100 / 0 / 0 % | 9.34 ms | 0% | One host in the cluster |
 | Baseline / gRPC | A only, no fault | 50 / 50.02 | 100 / 0 / 0 % | 7.08 ms | 0% | One host in the cluster |
+| RR / HTTP | Round robin 1:1:1, no fault | 50 / 50.02 | 33.3 / 33.3 / 33.4 % | 8.51 ms | 0% | Per-worker rotation over ~10 client connections, near-even |
+| RR / gRPC | Round robin 1:1:1, no fault | 50 / 50.02 | 33.3 / 33.3 / 33.3 % | 5.88 ms | 0% | One HTTP/2 connection, one worker, strict A→B→C per call |
 
 ## Conclusions
 
