@@ -2,8 +2,7 @@ filebeat.inputs:
   - type: log
     enabled: true
     paths:
-      - /var/log/app/app.log    # HTTP service (store-api)
-      - /var/log/app/grpc.log   # gRPC service (store-grpc)
+      - /var/log/app/app-*.log  # one file per replica (app-A.log, ...), HTTP and gRPC lines
     json.keys_under_root: true
     json.overwrite_keys: true
 
