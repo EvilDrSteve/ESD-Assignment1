@@ -126,7 +126,7 @@ pip install -r requirements-dev.txt
 ## Tests
 
 ```bash
-pytest -q          # 48 tests: HTTP API, gRPC, caller, OpenAPI contract, replica naming
+pytest -q          # 57 tests: HTTP API, gRPC, caller, OpenAPI contract, replica naming, faults
 ```
 
 Tests use an in-memory Redis (fakeredis) and an in-process gRPC server, so the
@@ -139,6 +139,7 @@ stack does not need to be running.
 | `tests/test_caller.py` | retry/backoff, no retry when unsafe, circuit breaker open → half-open → closed |
 | `tests/test_openapi.py`, `tests/test_contract.py` | `openapi.yaml` matches the code; live responses validated against the spec |
 | `tests/test_replica.py` | container name → replica letter; every log line carries `replica` |
+| `tests/test_faults.py` | per-replica delay/error on HTTP and gRPC, health checks exempt, `injected_delay_seconds` |
 
 ## HTTP API (A2)
 
@@ -154,7 +155,7 @@ stack does not need to be running.
 | GET | `/orders/{order_id}` | One order |
 | PATCH | `/orders/{order_id}` | Change status `{"status": "confirmed"}` |
 | GET | `/stats`, `/health`, `/metrics` | Ops |
-| POST | `/admin/faults` | Demo only: `{"mode": "error"\|"slow"\|"off", "duration_s": 10}` |
+| POST | `/admin/faults` | Demo only: `{"mode": "error"\|"slow"\|"delay"\|"off", "replica": "B"\|"all", "delay_ms": 200, "duration_s": 10}` |
 
 All errors are `application/problem+json` (RFC 9457) with `type`, `title`,
 `status`, `detail`, `instance`, `request_id` and, for validation, `errors`.
@@ -197,6 +198,19 @@ python clients/reliability_demo.py           # success, timeout+retry, breaker o
 
 Timeout 2 s, max 3 attempts (backoff 0.5 s, 1 s + jitter), circuit breaker
 opens after 3 failed attempts, retries after 5 s with one trial call.
+
+### Faults on one replica (A3)
+
+A fault is a Redis key with a TTL: `fault:B` affects replica B only,
+`fault:all` every replica (the A2 behaviour, still the default). Health checks
+and `/metrics` are never affected, so a slowed replica stays healthy.
+
+```bash
+bash scripts/fault.sh B delay            # B waits 200 ms before every HTTP request and gRPC call (10 min)
+bash scripts/fault.sh B delay 300 120    # 300 ms for 120 s
+bash scripts/fault.sh B off
+bash scripts/fault.sh all status         # injected_delay_seconds per replica, from Prometheus
+```
 
 ## gRPC (A2 Part B, extended in A3)
 
