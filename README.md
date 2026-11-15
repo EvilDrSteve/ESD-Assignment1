@@ -27,9 +27,10 @@ replica that crashes and comes back. The full brief is summarised in
  replica logs + Envoy access logs ──► Filebeat ──► Elasticsearch ──► Kibana
 ```
 
-**Status.** The code on this branch is still the finished A2: one HTTP container
-and one gRPC container, no Envoy yet. Everything in the "Run" section below
-describes that A2 setup until the A3 issues land.
+**Status.** Done: #2, three replicas (A, B, C), each serving HTTP and gRPC
+in one process. Not yet: Envoy (#6). Until it lands the replicas have no host
+ports, so the HTTP and gRPC examples further down need Envoy (or `docker exec`
+into a replica).
 
 **Plan.** The work is tracked as GitHub issues; each lists the issues it needs
 first.
@@ -59,41 +60,48 @@ first.
 
 The A3 brief is summarised in issue #1.
 
-```
-           HTTP :8050                          gRPC :50051
- curl / http_caller.py ──► app (FastAPI) ─┐  ┌─ grpc-server ◄── grpc_client.py
-                                          ▼  ▼
-                              orders_service.py (shared rules)
-                                          │
-                                    Redis (source of truth)
+### One replica
 
- Prometheus scrapes app:8050/metrics and grpc-server:9101 ──► Grafana :3000
- app.log + grpc.log ──► Filebeat ──► Elasticsearch ──► Kibana :5601
 ```
+        HTTP :8050                         gRPC :50051
+            │                                   │
+   ┌────────▼───────── app container (serve.py, one process) ─────▼────────┐
+   │  FastAPI app (main.py)                 grpc.server (grpc_server.py)    │
+   │        └──────────► orders_service.py (shared rules) ◄────────┘        │
+   │  /metrics on :8050: HTTP + gRPC metrics      logs: app-<replica>.log   │
+   └────────────────────────────────┬──────────────────────────────────────┘
+                                     ▼
+                               Redis (shared)
+```
+
+Compose starts three copies (`deploy.replicas: 3`): containers
+`assignment-1-app-1/2/3`. Scaled copies share one environment, so each works
+out its name at startup from Docker's reverse DNS (`app-2` → **B**, see
+`app/replica.py`). That name is in every log line (`"replica": "B"`) and in
+the log file name.
 
 ## Prerequisites
 
 - Docker with Docker Compose v2
 - Python 3.12 on the host for the tests and clients
-- Free ports: 8050, 50051, 9101, 9090, 9100, 3000, 9200, 5601
+- Free ports: 9090, 9100, 3000, 9200, 5601
 
 ## Run
 
 ```bash
-docker compose up -d --build
+docker compose up -d --build --remove-orphans   # --remove-orphans drops the old A2 grpc-server container
+docker compose ps                               # assignment-1-app-1, -2, -3
 ```
 
-This starts 10 containers: `redis`, `app` (HTTP), `grpc-server`, Prometheus,
-Grafana, Node Exporter, Elasticsearch, `es-init` (creates the index template,
-then exits), Kibana and Filebeat. Give it about 30 s.
+This starts 12 containers: `redis`, three `app` replicas, Prometheus, Grafana,
+Node Exporter, Elasticsearch, `es-init` (creates the index template, then
+exits), Kibana and Filebeat. Give it about 30 s.
 
 | Service | URL |
 |---------|-----|
-| HTTP API | http://localhost:8050 |
-| Swagger UI (OpenAPI) | http://localhost:8050/docs |
-| gRPC | localhost:50051 (`store.v1.OrderService`, reflection enabled) |
-| gRPC metrics | http://localhost:9101/metrics |
-| Prometheus | http://localhost:9090 |
+| HTTP API, Swagger UI, gRPC | through Envoy (#6); replicas have no host ports |
+| Replica logs | `docker compose logs app` or `/var/log/app/app-A.log` (B, C) in the `app_logs` volume |
+| Prometheus | http://localhost:9090 (job `store`: one target per replica) |
 | Grafana | http://localhost:3000 (admin / admin) |
 | Kibana | http://localhost:5601 |
 
@@ -102,7 +110,8 @@ Dashboard** for A1, **Store → Store A2 — HTTP vs gRPC: Place order**) are
 provisioned from `grafana/`, so nothing has to be set up by hand.
 
 Kibana: create a data view `store-logs-*` with `@timestamp`, then search, e.g.
-`request_id : "trace-demo-1"` or `service : "store-grpc" and grpc_code : *`.
+`request_id : "trace-demo-1"`, `transport : "grpc" and grpc_code : *` or
+`replica : "B"`.
 
 Stop: `docker compose down` (add `-v` to delete the data volumes).
 
@@ -117,7 +126,7 @@ pip install -r requirements-dev.txt
 ## Tests
 
 ```bash
-pytest -q          # 37 tests: HTTP API, gRPC, caller, OpenAPI contract
+pytest -q          # 44 tests: HTTP API, gRPC, caller, OpenAPI contract, replica naming
 ```
 
 Tests use an in-memory Redis (fakeredis) and an in-process gRPC server, so the
@@ -129,6 +138,7 @@ stack does not need to be running.
 | `tests/test_grpc.py` | gRPC success, FAILED_PRECONDITION, INVALID_ARGUMENT, shared data and idempotency with HTTP, gRPC metrics |
 | `tests/test_caller.py` | retry/backoff, no retry when unsafe, circuit breaker open → half-open → closed |
 | `tests/test_openapi.py`, `tests/test_contract.py` | `openapi.yaml` matches the code; live responses validated against the spec |
+| `tests/test_replica.py` | container name → replica letter; every log line carries `replica` |
 
 ## HTTP API (A2)
 

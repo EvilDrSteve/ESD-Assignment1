@@ -2,13 +2,15 @@ global:
   scrape_interval: 2s
 
 scrape_configs:
-  - job_name: "store-api"
-    static_configs:
-      - targets: ["app:8050"]
-
-  - job_name: "store-grpc"
-    static_configs:
-      - targets: ["grpc-server:9101"]
+  # All replicas of the store (A3). Docker DNS returns one A record per
+  # replica for "app", so each replica is scraped on its own. /metrics on
+  # :8050 holds both the HTTP and the gRPC metrics of that replica.
+  - job_name: "store"
+    dns_sd_configs:
+      - names: ["app"]
+        type: A
+        port: 8050
+        refresh_interval: 5s
 
   - job_name: "node-exporter"
     static_configs:

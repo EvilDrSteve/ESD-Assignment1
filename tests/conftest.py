@@ -10,6 +10,7 @@ sys.path.insert(0, os.path.join(ROOT, "app", "gen"))
 sys.path.insert(0, os.path.join(ROOT, "clients"))
 
 os.environ.setdefault("ENABLE_FAULT_ADMIN", "true")
+os.environ.setdefault("REPLICA", "T")  # skip the reverse-DNS lookup outside Docker
 
 import store as store_module  # noqa: E402
 
