@@ -1,4 +1,7 @@
-// Order service for the online store (ESD Assignment 2, Part B).
+// Order service for the online store (ESD Assignment 2 Part B; GetProduct added in A3).
+//
+// Each replica also serves the standard grpc.health.v1.Health service
+// (grpcio-health-checking), which Envoy uses for active health checks.
 //
 // Generate Python code (run from the app/ directory):
 //   python -m grpc_tools.protoc -I proto --python_out=gen --pyi_out=gen --grpc_python_out=gen proto/orders.proto
@@ -21,6 +24,25 @@ service OrderService {
   //   UNAVAILABLE         the store (Redis) is unreachable
   //   DEADLINE_EXCEEDED   the client's deadline passed
   rpc PlaceOrder(PlaceOrderRequest) returns (PlaceOrderResponse);
+
+  // Read one product (A3). Read-only and not rate limited, so it is the gRPC
+  // call used for load tests; same data as HTTP GET /products/{product_id}.
+  //   NOT_FOUND    no product with that id
+  //   UNAVAILABLE  the store (Redis) is unreachable
+  rpc GetProduct(GetProductRequest) returns (Product);
+}
+
+message GetProductRequest {
+  string product_id = 1;
+}
+
+message Product {
+  string id = 1;
+  string name = 2;
+  string description = 3;
+  string category = 4;
+  double price = 5;
+  int32 stock = 6;
 }
 
 message PlaceOrderRequest {

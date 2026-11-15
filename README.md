@@ -126,7 +126,7 @@ pip install -r requirements-dev.txt
 ## Tests
 
 ```bash
-pytest -q          # 44 tests: HTTP API, gRPC, caller, OpenAPI contract, replica naming
+pytest -q          # 48 tests: HTTP API, gRPC, caller, OpenAPI contract, replica naming
 ```
 
 Tests use an in-memory Redis (fakeredis) and an in-process gRPC server, so the
@@ -135,7 +135,7 @@ stack does not need to be running.
 | File | Covers |
 |------|--------|
 | `tests/test_http_api.py` | valid requests, invalid input, repeated requests (idempotency), 429 + Retry-After, faults, request ids |
-| `tests/test_grpc.py` | gRPC success, FAILED_PRECONDITION, INVALID_ARGUMENT, shared data and idempotency with HTTP, gRPC metrics |
+| `tests/test_grpc.py` | gRPC success, FAILED_PRECONDITION, INVALID_ARGUMENT, GetProduct, health check, shared data and idempotency with HTTP, gRPC metrics |
 | `tests/test_caller.py` | retry/backoff, no retry when unsafe, circuit breaker open → half-open → closed |
 | `tests/test_openapi.py`, `tests/test_contract.py` | `openapi.yaml` matches the code; live responses validated against the spec |
 | `tests/test_replica.py` | container name → replica letter; every log line carries `replica` |
@@ -191,7 +191,13 @@ python clients/reliability_demo.py           # success, timeout+retry, breaker o
 Timeout 2 s, max 3 attempts (backoff 0.5 s, 1 s + jitter), circuit breaker
 opens after 3 failed attempts, retries after 5 s with one trial call.
 
-## gRPC (A2 Part B)
+## gRPC (A2 Part B, extended in A3)
+
+| Service / method | What |
+|---|---|
+| `store.v1.OrderService/PlaceOrder` | Place an order from a cart (A2) |
+| `store.v1.OrderService/GetProduct` | Read one product, `NOT_FOUND` if unknown (A3; read-only, used for load tests) |
+| `grpc.health.v1.Health/Check` | Standard health check, `SERVING` while the replica runs (A3; used by Envoy) |
 
 Proto: `app/proto/orders.proto`. Generated code is committed in `app/gen/` and
 regenerated in the Docker build. Generation command (from `app/`):
