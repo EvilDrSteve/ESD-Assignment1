@@ -48,6 +48,12 @@ def header(text: str, title: str) -> str:
 VARIANTS = {
     # #13: A gets twice the share of B and C (expected 50 / 25 / 25 %)
     "weighted-2-1-1.yaml": lambda t: header(weight(t, "A", 2), "weighted round robin, A:B:C = 2:1:1"),
+    # #14: equal weights, LEAST_REQUEST. With equal weights Envoy samples two
+    # random hosts per request and takes the one with fewer active requests
+    # (power of two choices, default choice_count 2).
+    "least-request.yaml": lambda t: header(
+        replace(t, "lb_policy: ROUND_ROBIN", "lb_policy: LEAST_REQUEST", 2),
+        "least request (power of two choices), equal weights"),
 }
 
 

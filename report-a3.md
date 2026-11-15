@@ -282,6 +282,126 @@ The run was 16:17:45 to 16:18:45 UTC, with the result in
 **Restore.** I recreated Envoy without `ENVOY_CONFIG`; the admin `/clusters`
 endpoint shows `weight::1` for every host again.
 
+### D2. Slow replica B: round robin vs least request
+
+**Change.**
+- **Fault:** a 200 ms delay on every call to B, both interfaces, via the
+  fault switch (`bash scripts/fault.sh B delay 200 900`). Health checks and
+  `/metrics` are exempt. Weights stay equal.
+- **Two runs, same workload:**
+  - `delayb-rr`: base config, `ROUND_ROBIN`, 16:27:01 to 16:28:01 UTC
+  - `delayb-lr`: `envoy/least-request.yaml`, `LEAST_REQUEST`, 16:28:35 to
+    16:29:35 UTC
+- **Least request with equal weights:** Envoy picks two hosts at random (with
+  replacement, `choice_count` 2) and sends the request to the one with fewer
+  active requests ("power of two choices").
+
+```bash
+bash scripts/fault.sh B delay 200 900
+python clients/loadgen.py --interface both --rate 50 --duration 60 --label delayb-rr
+ENVOY_CONFIG=least-request.yaml docker compose up -d --force-recreate envoy
+python clients/loadgen.py --interface both --rate 50 --duration 60 --label delayb-lr
+docker compose up -d --force-recreate envoy && bash scripts/fault.sh B off      # restore
+```
+
+**Prediction** (written before the runs):
+
+*Round robin:*
+- **B's share:** still about 33%, because round robin doesn't look at load.
+- **B's active requests:** about 16.7/s × 0.2 s ≈ 3.3 per interface.
+- **Client p95:** about 200 ms, since a third of all calls are slow.
+
+*Least request:*
+- **B's share:** B almost always has calls in flight while A and C have none,
+  so it loses nearly every comparison. B still gets every call where both
+  random picks are B (1/9 ≈ 11%), plus a few ties. Expected roughly 5–15%.
+- **B's active requests:** they fall in proportion to its share.
+- **Client p95:** it stays near 200 ms unless B's share falls below 5%.
+
+**Results**
+
+| Run / interface | A / B / C calls | B share | Avg in flight on B | Client p50 | Client p95 | Calls slower than 200 ms |
+|---|---|---|---|---|---|---|
+| RR / HTTP | 999 / 1002 / 999 | 33.4 % | 3.31 | 6.05 ms | 206.99 ms | 33.4 % |
+| RR / gRPC | 1000 / 1000 / 1000 | 33.3 % | 3.48 | 4.02 ms | 204.56 ms | 33.3 % |
+| LR / HTTP | 1285 / 445 / 1270 | 14.8 % | 1.59 | 6.17 ms | 207.01 ms | 14.8 % |
+| LR / gRPC | 1258 / 426 / 1316 | 14.2 % | 1.69 | 3.95 ms | 204.51 ms | 14.2 % |
+
+Notes on the table:
+- **Call counts:** for both runs they match Envoy's access log in
+  Elasticsearch exactly.
+- **Avg in flight on B:** the mean of the replica's in-flight gauge over the
+  run (`avg_over_time(...[58s:2s])`).
+- **No errors:** there were no failures in either run.
+- **Latency by replica:** the client splits latency by the replica that
+  answered.
+  - B: p50 about 205 ms in both runs.
+  - A and C: p50 about 4–6 ms, p95 under 9 ms in both runs.
+
+**Observations** (`14-share-rr.png`, `14-share-lr.png`,
+`14-grafana-http-rr-then-lr.jpg`, `14-grafana-grpc-rr-then-lr.jpg`,
+`14-grafana-envoy.jpg`; the long screenshots show both runs side by side):
+
+*Round robin:*
+- B's rate line sits exactly on A's and C's (about 16.7/s each).
+- B's active-requests line runs at 3–4, while A and C stay at 0.
+- Envoy's active upstream requests per cluster run at 3–5.
+
+*Least request:*
+- B's rate drops to about 7/s, and A and C rise to about 21/s.
+- B's active requests fall to 1–2, with gaps where it has none.
+
+*Both runs:*
+- The fault-switch tile shows B at 200 ms throughout.
+- Grafana's server-side p50 for B reads 175 ms, not about 205 ms.
+  `histogram_quantile` interpolates linearly inside the 100–250 ms bucket, so
+  the client's per-replica numbers are the precise ones here.
+
+**Explanation**
+- **Round robin:** it hands B every third call whatever B's state, so B's
+  share is unchanged.
+  - B's in-flight count is what Little's law predicts:
+    16.7/s × 0.205 s ≈ 3.4, measured 3.3–3.5.
+  - A third of all calls take 205 ms, so the client p95 (and p99) are B's
+    latency.
+- **Least request:** it reacts to exactly that in-flight count. Each call
+  compares two random hosts.
+  - **When B loses:** B has 1–2 calls open almost all the time and A and C
+    have about 0, so B loses whenever the pair includes A or C.
+  - **When B is still chosen:** when both picks are B (1/9 = 11.1%), and
+    rarely when B happens to have 0 in flight and ties.
+  - **Measured:** 14.2–14.8%, just above the 11% floor, as predicted.
+  - **Little's law again:** in-flight on B = 7.3/s × 0.205 s ≈ 1.5, measured
+    1.6–1.7.
+- **Client latency:** the share of slow calls fell from 33% to 14–15%, which
+  roughly halves the average.
+  - Average ≈ share × 205 ms + the rest × 5 ms: about 72 ms with round robin
+    vs about 35 ms with least request (estimated from the per-replica p50s).
+  - The p95 did **not** improve, because 14% slow calls is still more than
+    5%, so the 95th percentile is still a B call. Every percentile above
+    about the 86th still hits B; the improvement shows at p80–p85 and in the
+    average.
+- **The same on both interfaces:** least request counts active requests per
+  host across Envoy's workers, so HTTP and gRPC react identically, despite
+  the different connection setups.
+- **Getting the p95 down:** raising `choice_count` to 3 would make the
+  "both picks are B" floor 1/27 ≈ 4%, below 5%.
+  - Removing B with outlier detection (on latency) would take it out
+    completely.
+  - The cost is that a merely slow replica loses almost all traffic.
+- **Health checks can't help here:** a 200 ms delay doesn't fail them,
+  because they are exempt from the fault and a slow replica still answers
+  `/health` in time. D3 relies on that difference.
+
+**Restore.** Envoy was recreated with the base config and the fault was
+switched off. The fault-switch gauge reads 0 on A, B and C, and `LEAST_REQUEST`
+no longer appears in the config dump.
+- The first `fault.sh B off` failed: it ran while Envoy was still starting
+  (curl exit 56, connection reset).
+- B stayed delayed for about 20 s more, after the second run had ended, until
+  it was sent again.
+- `scripts/fault.sh` now retries its request.
+
 ## Results table
 
 | Run / interface | Policy and fault | Target / actual rps | A / B / C share | Client p95 | Error rate | Explanation |
@@ -292,6 +412,10 @@ endpoint shows `weight::1` for every host again.
 | RR / gRPC | Round robin 1:1:1, no fault | 50 / 50.02 | 33.3 / 33.3 / 33.3 % | 5.88 ms | 0% | One HTTP/2 connection, one worker, strict A→B→C per call |
 | WRR / HTTP | Weighted RR 2:1:1, no fault | 50 / 50.02 | 50.0 / 25.0 / 25.0 % | 8.01 ms | 0% | Weights set the share; latency unchanged (no extra capacity, load far below it) |
 | WRR / gRPC | Weighted RR 2:1:1, no fault | 50 / 50.02 | 50.0 / 25.0 / 25.0 % | 5.24 ms | 0% | Exact A A B C cycle on the single connection |
+| Slow B, RR / HTTP | RR 1:1:1, B +200 ms | 50 / 50.01 | 33.3 / 33.4 / 33.3 % | 206.99 ms | 0% | RR ignores load; 1/3 of calls slow |
+| Slow B, RR / gRPC | RR 1:1:1, B +200 ms | 50 / 50.02 | 33.3 / 33.3 / 33.3 % | 204.56 ms | 0% | Same |
+| Slow B, LR / HTTP | Least request, B +200 ms | 50 / 50.02 | 42.8 / 14.8 / 42.3 % | 207.01 ms | 0% | B loses most pairings; 1/9 floor keeps p95 on B |
+| Slow B, LR / gRPC | Least request, B +200 ms | 50 / 50.02 | 41.9 / 14.2 / 43.9 % | 204.51 ms | 0% | Same; per-host active counts shared by workers |
 
 ## Conclusions
 

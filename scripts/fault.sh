@@ -28,5 +28,6 @@ case "$MODE" in
   *)     BODY="{\"mode\":\"$MODE\",\"replica\":\"$REPLICA\",\"delay_ms\":$DELAY_MS,\"duration_s\":$DURATION_S}" ;;
 esac
 
-curl -s -X POST "$BASE/admin/faults" -H "Content-Type: application/json" -d "$BODY"
+# Retries cover Envoy being recreated a moment ago (connection refused/reset)
+curl -s --retry 5 --retry-all-errors --retry-delay 1 -X POST "$BASE/admin/faults" -H "Content-Type: application/json" -d "$BODY"
 echo

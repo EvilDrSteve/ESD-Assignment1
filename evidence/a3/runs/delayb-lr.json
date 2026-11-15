@@ -1,0 +1,101 @@
+{
+  "label": "delayb-lr",
+  "runs": [
+    {
+      "interface": "http",
+      "target": "localhost:8050",
+      "operation": "GET /products/{id}",
+      "target_rate": 50.0,
+      "duration_s": 60.0,
+      "started_at": "2026-11-15T16:28:35+00:00",
+      "ended_at": "2026-11-15T16:29:36+00:00",
+      "sent": 3000,
+      "actual_rate": 50.02,
+      "max_send_lag_ms": 6.15,
+      "successes": 3000,
+      "failures": 0,
+      "error_rate_pct": 0.0,
+      "by_status": {
+        "200": 3000
+      },
+      "by_replica": {
+        "A": 1285,
+        "B": 445,
+        "C": 1270
+      },
+      "share_pct": {
+        "A": 42.8,
+        "B": 14.8,
+        "C": 42.3
+      },
+      "latency_ms": {
+        "p50": 6.17,
+        "p95": 207.01,
+        "p99": 208.48,
+        "max": 213.73
+      },
+      "latency_ms_by_replica": {
+        "A": {
+          "p50": 5.91,
+          "p95": 8.65
+        },
+        "B": {
+          "p50": 206.47,
+          "p95": 208.83
+        },
+        "C": {
+          "p50": 5.92,
+          "p95": 8.54
+        }
+      }
+    },
+    {
+      "interface": "grpc",
+      "target": "localhost:50051",
+      "operation": "OrderService/GetProduct",
+      "target_rate": 50.0,
+      "duration_s": 60.0,
+      "started_at": "2026-11-15T16:28:35+00:00",
+      "ended_at": "2026-11-15T16:29:36+00:00",
+      "sent": 3000,
+      "actual_rate": 50.02,
+      "max_send_lag_ms": 19.05,
+      "successes": 3000,
+      "failures": 0,
+      "error_rate_pct": 0.0,
+      "by_status": {
+        "OK": 3000
+      },
+      "by_replica": {
+        "A": 1258,
+        "B": 426,
+        "C": 1316
+      },
+      "share_pct": {
+        "A": 41.9,
+        "B": 14.2,
+        "C": 43.9
+      },
+      "latency_ms": {
+        "p50": 3.95,
+        "p95": 204.51,
+        "p99": 205.77,
+        "max": 226.58
+      },
+      "latency_ms_by_replica": {
+        "A": {
+          "p50": 3.73,
+          "p95": 6.25
+        },
+        "B": {
+          "p50": 204.16,
+          "p95": 206.03
+        },
+        "C": {
+          "p50": 3.75,
+          "p95": 6.19
+        }
+      }
+    }
+  ]
+}
