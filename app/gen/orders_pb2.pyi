@@ -22,6 +22,28 @@ SHIPPED: OrderStatus
 DELIVERED: OrderStatus
 CANCELLED: OrderStatus
 
+class GetProductRequest(_message.Message):
+    __slots__ = ("product_id",)
+    PRODUCT_ID_FIELD_NUMBER: _ClassVar[int]
+    product_id: str
+    def __init__(self, product_id: _Optional[str] = ...) -> None: ...
+
+class Product(_message.Message):
+    __slots__ = ("id", "name", "description", "category", "price", "stock")
+    ID_FIELD_NUMBER: _ClassVar[int]
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    DESCRIPTION_FIELD_NUMBER: _ClassVar[int]
+    CATEGORY_FIELD_NUMBER: _ClassVar[int]
+    PRICE_FIELD_NUMBER: _ClassVar[int]
+    STOCK_FIELD_NUMBER: _ClassVar[int]
+    id: str
+    name: str
+    description: str
+    category: str
+    price: float
+    stock: int
+    def __init__(self, id: _Optional[str] = ..., name: _Optional[str] = ..., description: _Optional[str] = ..., category: _Optional[str] = ..., price: _Optional[float] = ..., stock: _Optional[int] = ...) -> None: ...
+
 class PlaceOrderRequest(_message.Message):
     __slots__ = ("cart_id", "idempotency_key")
     CART_ID_FIELD_NUMBER: _ClassVar[int]

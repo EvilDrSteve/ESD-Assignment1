@@ -39,6 +39,11 @@ class OrderServiceStub(object):
                 request_serializer=orders__pb2.PlaceOrderRequest.SerializeToString,
                 response_deserializer=orders__pb2.PlaceOrderResponse.FromString,
                 _registered_method=True)
+        self.GetProduct = channel.unary_unary(
+                '/store.v1.OrderService/GetProduct',
+                request_serializer=orders__pb2.GetProductRequest.SerializeToString,
+                response_deserializer=orders__pb2.Product.FromString,
+                _registered_method=True)
 
 
 class OrderServiceServicer(object):
@@ -60,6 +65,16 @@ class OrderServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def GetProduct(self, request, context):
+        """Read one product (A3). Read-only and not rate limited, so it is the gRPC
+        call used for load tests; same data as HTTP GET /products/{product_id}.
+        NOT_FOUND    no product with that id
+        UNAVAILABLE  the store (Redis) is unreachable
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_OrderServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -67,6 +82,11 @@ def add_OrderServiceServicer_to_server(servicer, server):
                     servicer.PlaceOrder,
                     request_deserializer=orders__pb2.PlaceOrderRequest.FromString,
                     response_serializer=orders__pb2.PlaceOrderResponse.SerializeToString,
+            ),
+            'GetProduct': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetProduct,
+                    request_deserializer=orders__pb2.GetProductRequest.FromString,
+                    response_serializer=orders__pb2.Product.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -96,6 +116,33 @@ class OrderService(object):
             '/store.v1.OrderService/PlaceOrder',
             orders__pb2.PlaceOrderRequest.SerializeToString,
             orders__pb2.PlaceOrderResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetProduct(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/store.v1.OrderService/GetProduct',
+            orders__pb2.GetProductRequest.SerializeToString,
+            orders__pb2.Product.FromString,
             options,
             channel_credentials,
             insecure,

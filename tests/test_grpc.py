@@ -8,14 +8,19 @@ import orders_pb2_grpc
 
 
 @pytest.fixture
-def stub():
+def channel():
     from grpc_server import build_server
     server = build_server(port=0)
     port = server.add_insecure_port("127.0.0.1:0")
     server.start()
-    with grpc.insecure_channel(f"127.0.0.1:{port}") as channel:
-        yield orders_pb2_grpc.OrderServiceStub(channel)
+    with grpc.insecure_channel(f"127.0.0.1:{port}") as ch:
+        yield ch
     server.stop(None)
+
+
+@pytest.fixture
+def stub(channel):
+    return orders_pb2_grpc.OrderServiceStub(channel)
 
 
 def place(stub, cart_id, key="", request_id="test-rid"):
@@ -67,3 +72,27 @@ def test_grpc_metrics_recorded(stub):
         "grpc_code": "FAILED_PRECONDITION",
     })
     assert value and value >= 1
+
+
+# ── A3: read-only GetProduct and the health service ──────────────────────
+
+
+def test_get_product_matches_http(stub, client):
+    product = stub.GetProduct(orders_pb2.GetProductRequest(product_id="p2"), timeout=2)
+    assert product.name == "Mechanical Keyboard" and product.price == 89.99
+    http = client.get("/products/p2").json()
+    assert (product.id, product.category, product.stock) == (http["id"], http["category"], http["stock"])
+
+
+def test_get_unknown_product_is_not_found(stub):
+    with pytest.raises(grpc.RpcError) as e:
+        stub.GetProduct(orders_pb2.GetProductRequest(product_id="nope"), timeout=2)
+    assert e.value.code() == grpc.StatusCode.NOT_FOUND
+    assert dict(e.value.trailing_metadata())["error-type"] == "not-found"
+
+
+@pytest.mark.parametrize("service", ["", "store.v1.OrderService"])
+def test_health_check_serving(channel, service):
+    from grpc_health.v1 import health_pb2, health_pb2_grpc
+    reply = health_pb2_grpc.HealthStub(channel).Check(health_pb2.HealthCheckRequest(service=service), timeout=2)
+    assert reply.status == health_pb2.HealthCheckResponse.SERVING
