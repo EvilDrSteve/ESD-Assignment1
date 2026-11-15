@@ -114,6 +114,18 @@ docker compose up -d --force-recreate envoy                                   # 
 | Variant file | Experiment |
 |---|---|
 | `weighted-2-1-1.yaml` | D1: weighted round robin, A:B:C = 2:1:1 |
+| `least-request.yaml` | D2: `LEAST_REQUEST` (power of two choices), equal weights |
+
+D2 (slow B, round robin vs least request):
+
+```bash
+bash scripts/fault.sh B delay 200 900
+python clients/loadgen.py --interface both --rate 50 --duration 60 --label delayb-rr
+ENVOY_CONFIG=least-request.yaml docker compose up -d --force-recreate envoy
+python clients/loadgen.py --interface both --rate 50 --duration 60 --label delayb-lr
+docker compose up -d --force-recreate envoy
+bash scripts/fault.sh B off && bash scripts/fault.sh all status   # recover: delay 0 everywhere
+```
 
 Runs so far (`evidence/a3/runs/`, details in `report-a3.md`):
 
@@ -122,6 +134,11 @@ Runs so far (`evidence/a3/runs/`, details in `report-a3.md`):
 | `baseline-a-only` | A only | 3000 / 0 / 0 | 3000 / 0 / 0 |
 | `rr-equal` | Round robin 1:1:1 | 1000 / 999 / 1001 | 1000 / 1000 / 1000 |
 | `wrr-2-1-1` | Weighted round robin 2:1:1 | 1499 / 751 / 750 | 1500 / 750 / 750 |
+| `delayb-rr` | Round robin, B +200 ms | 999 / 1002 / 999 | 1000 / 1000 / 1000 |
+| `delayb-lr` | Least request, B +200 ms | 1285 / 445 / 1270 | 1258 / 426 / 1316 |
+
+The load client also prints and saves client p50/p95 **per replica**
+(`latency_ms_by_replica`), so a slow replica stands out directly.
 
 ## Prerequisites
 

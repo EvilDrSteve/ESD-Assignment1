@@ -157,7 +157,19 @@ async def drive(interface: str, target: str, rate: float, duration: float, timeo
             "p99": round(percentile(latencies, 99), 2),
             "max": round(max(latencies), 2),
         },
+        # Client-side latency of the calls each replica answered ("?" = no answer)
+        "latency_ms_by_replica": {
+            r: {"p50": round(percentile(ms, 50), 2), "p95": round(percentile(ms, 95), 2)}
+            for r, ms in sorted(by_replica_ms(rec).items())
+        },
     }
+
+
+def by_replica_ms(rec: Recorder) -> dict[str, list[float]]:
+    out: dict[str, list[float]] = {}
+    for _, replica, ms in rec.results:
+        out.setdefault(replica, []).append(ms)
+    return out
 
 
 def print_summary(s: dict):
@@ -169,6 +181,8 @@ def print_summary(s: dict):
           f"({s['error_rate_pct']}%)  by status {s['by_status']}")
     print(f"  replicas  {s['by_replica']}  share % {s['share_pct']}")
     print(f"  latency   p50 {lat['p50']} ms  p95 {lat['p95']} ms  p99 {lat['p99']} ms  max {lat['max']} ms")
+    per = "  ".join(f"{r} p50 {v['p50']} / p95 {v['p95']} ms" for r, v in s["latency_ms_by_replica"].items())
+    print(f"  by replica {per}")
 
 
 async def main_async(args) -> list[dict]:
