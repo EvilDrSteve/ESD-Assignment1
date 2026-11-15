@@ -27,6 +27,7 @@ from models import (
     UpdateOrderStatus,
 )
 from ratelimit import FixedWindowLimiter, RateLimited
+from replica import REPLICA
 from store import store
 
 demo_good = PromCounter("demo_requests_total_good", "Demo counter without high-cardinality label")
@@ -206,6 +207,7 @@ async def observe_requests(request: Request, call_next):
 
     response.headers["X-Request-ID"] = request_id
     response.headers["X-Response-Time-Ms"] = f"{duration * 1000:.2f}"
+    response.headers["X-Replica"] = REPLICA  # A3: Envoy logs it; the load client counts it
 
     logger.info(
         "request",

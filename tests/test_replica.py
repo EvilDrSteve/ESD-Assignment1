@@ -26,3 +26,12 @@ def test_every_log_line_has_replica(client, caplog):
         logger.info("probe")  # any line, not only request logs
     assert len(caplog.records) >= 2
     assert all(record.replica == "T" for record in caplog.records)
+
+
+def test_responses_name_the_replica(client, stub):
+    """X-Replica / x-replica tell Envoy logs and the load client who answered."""
+    import orders_pb2
+    assert client.get("/products/p1").headers["X-Replica"] == "T"
+    assert client.get("/products/nope").headers["X-Replica"] == "T"  # errors too
+    _, call = stub.GetProduct.with_call(orders_pb2.GetProductRequest(product_id="p1"), timeout=2)
+    assert dict(call.initial_metadata())["x-replica"] == "T"

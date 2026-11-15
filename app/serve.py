@@ -22,7 +22,9 @@ def run():
     grpc_server.start()
     logger.info("grpc_started", extra={"grpc_port": GRPC_PORT})
     try:
-        uvicorn.run("main:app", host="0.0.0.0", port=HTTP_PORT)
+        # Keep idle connections open longer than Envoy does (30 s), so Envoy is
+        # always the side that closes them and never reuses one being closed
+        uvicorn.run("main:app", host="0.0.0.0", port=HTTP_PORT, timeout_keep_alive=75)
     finally:
         logger.info("grpc_stopping")
         grpc_server.stop(grace=5).wait()

@@ -21,16 +21,16 @@ replica that crashes and comes back. The full brief is summarised in
 ```
                                  ┌──► replica A (HTTP + gRPC) ─┐
  load client ──► Envoy ──────────┼──► replica B (HTTP + gRPC) ─┼──► Redis (shared data)
- (HTTP + gRPC)   :10000 / :10001 └──► replica C (HTTP + gRPC) ─┘
+ (HTTP + gRPC)   :8050 / :50051  └──► replica C (HTTP + gRPC) ─┘
 
  Prometheus scrapes A, B, C and Envoy directly ──► Grafana
  replica logs + Envoy access logs ──► Filebeat ──► Elasticsearch ──► Kibana
 ```
 
-**Status.** Done: #2, three replicas (A, B, C), each serving HTTP and gRPC
-in one process. Not yet: Envoy (#6). Until it lands the replicas have no host
-ports, so the HTTP and gRPC examples further down need Envoy (or `docker exec`
-into a replica).
+**Status.** Done: #2–#6. Three replicas (A, B, C) each serve HTTP and gRPC
+in one process. Envoy listens on the A2 ports (8050 HTTP, 50051 gRPC) and
+sends everything to **A** (Part A). All A2 commands below now go through
+Envoy unchanged.
 
 **Plan.** The work is tracked as GitHub issues; each lists the issues it needs
 first.
@@ -50,13 +50,13 @@ first.
 
 **Things that change in A3 and why** (details in each issue):
 
-| Thing | Where it lives now | Problem with 3 replicas |
-|---|---|---|
-| Products, carts, orders | Redis | None: all replicas share it |
-| Idempotency records | Redis | None: duplicate prevention still works |
-| Rate-limit counters | In each process's memory | Each replica counts separately, so a client gets ~3× the limit (#4) |
-| Client IP for the rate limit | Socket address | Behind Envoy every request comes from Envoy's IP (#4) |
-| Fault switch | One Redis key | Slows every replica; experiments need B alone (#5) |
+| Thing | In A2 | Problem with 3 replicas | A3 |
+|---|---|---|---|
+| Products, carts, orders | Redis | None: all replicas share it | unchanged |
+| Idempotency records | Redis | None: duplicate prevention still works | unchanged |
+| Rate-limit counters | Each process's memory | Each replica counts separately, so a client gets ~3× the limit | Redis key per client (#4) |
+| Client IP for the rate limit | Socket address | Behind Envoy every request comes from Envoy's IP | last `X-Forwarded-For` entry (#4) |
+| Fault switch | One Redis key | Slows every replica; experiments need B alone | `fault:B` / `fault:all` (#5) |
 
 The A3 brief is summarised in issue #1.
 
@@ -80,26 +80,46 @@ out its name at startup from Docker's reverse DNS (`app-2` → **B**, see
 `app/replica.py`). That name is in every log line (`"replica": "B"`) and in
 the log file name.
 
+### Envoy (`envoy/envoy.yaml`)
+
+| Listener | Port | Cluster | Upstream protocol |
+|---|---|---|---|
+| `http` | 8050 | `store_http` → replicas' :8050 | HTTP/1.1 |
+| `grpc` | 50051 | `store_grpc` → replicas' :50051 | HTTP/2 |
+
+Both listeners are HTTP connection managers (layer 7), not TCP proxies, so
+Envoy chooses a replica for **every request or call**. With a TCP proxy a
+gRPC client's single long-lived connection would pin all its calls to one
+replica. Envoy keeps the caller's `X-Request-ID` (`preserve_external_request_id`),
+appends the caller's address to `X-Forwarded-For`, and writes one JSON access
+log line per request with `request_id`, `upstream_host` and `replica` (from
+the `X-Replica` response header each replica sets). Part A: both clusters
+list replica A only.
+
 ## Prerequisites
 
 - Docker with Docker Compose v2
 - Python 3.12 on the host for the tests and clients
-- Free ports: 9090, 9100, 3000, 9200, 5601
+- Free ports: 8050, 50051, 9901, 9090, 9100, 3000, 9200, 5601
 
 ## Run
 
 ```bash
 docker compose up -d --build --remove-orphans   # --remove-orphans drops the old A2 grpc-server container
-docker compose ps                               # assignment-1-app-1, -2, -3
+docker compose ps                               # assignment-1-app-1, -2, -3 and envoy
 ```
 
-This starts 12 containers: `redis`, three `app` replicas, Prometheus, Grafana,
-Node Exporter, Elasticsearch, `es-init` (creates the index template, then
-exits), Kibana and Filebeat. Give it about 30 s.
+This starts 13 containers: `redis`, three `app` replicas, `envoy`,
+Prometheus, Grafana, Node Exporter, Elasticsearch, `es-init` (creates the
+index template, then exits), Kibana and Filebeat. Give it about 30 s.
 
 | Service | URL |
 |---------|-----|
-| HTTP API, Swagger UI, gRPC | through Envoy (#6); replicas have no host ports |
+| HTTP API (through Envoy) | http://localhost:8050 |
+| Swagger UI (OpenAPI) | http://localhost:8050/docs |
+| gRPC (through Envoy) | localhost:50051 (`store.v1.OrderService`, `grpc.health.v1.Health`, reflection enabled) |
+| Envoy admin | http://localhost:9901 (`/clusters`, `/stats/prometheus`) |
+| Envoy access log | `docker exec envoy tail -f /var/log/envoy/access.log` (JSON, one line per request/call) |
 | Replica logs | `docker compose logs app` or `/var/log/app/app-A.log` (B, C) in the `app_logs` volume |
 | Prometheus | http://localhost:9090 (job `store`: one target per replica) |
 | Grafana | http://localhost:3000 (admin / admin) |
